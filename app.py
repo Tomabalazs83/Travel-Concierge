@@ -9,13 +9,19 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 
 # REFINED AI INITIALIZATION
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 try:
-    genai.configure(api_key=GEMINI_KEY)
-    # Using the exact string recommended in the Quickstart guide
-    ai_brain = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    # Explicitly using 'rest' transport to avoid 404/gRPC issues on Railway
+    genai.configure(api_key=GEMINI_KEY, transport='rest')
+    ai_brain = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        generation_config={"temperature": 0.7}
+    )
 except Exception as e:
-    logging.error(f"AI Setup Error: {e}")
-    
+    logger.error(f"AI Setup Error: {e}")
+
 # --- 2. FLIGHT REGISTRY TOOL ---
 def get_flight_price(dest_entity):
     url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
@@ -71,19 +77,27 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(chat_id=chat_id, text=report, parse_mode='Markdown')
 
     try:
-        # A simple, direct call to the analysis engine
         prompt = f"As a polite British Butler, summarize these travel prices for Sir: {data_for_ai}. Be witty and recommend the best value."
+        # Use the modern .generate_content call
         response = ai_brain.generate_content(prompt)
         await context.bot.send_message(chat_id=chat_id, text=f"🎩 **Concierge's Analysis:**\n{response.text}")
     except Exception as e:
         logger.error(f"AI Error: {e}")
-        # Providing the actual model error to help us diagnose if 'gemini-pro' also fails
         await context.bot.send_message(chat_id=chat_id, text=f"⚠️ *The engine reports: {str(e)[:50]}...*")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Concierge active. Daily at 08:00. Use /check now, Sir.")
     context.user_data['chat_id'] = update.effective_chat.id
-    context.job_queue.run_daily(daily_brief, time=datetime.time(hour=8, minute=0), chat_id=update.effective_chat.id)
+    # Clear old jobs before starting a new one
+    current_jobs = context.job_queue.get_jobs_by_name('daily_flight_check')
+    for job in current_jobs: job.schedule_removal()
+    
+    context.job_queue.run_daily(
+        daily_brief, 
+        time=datetime.time(hour=8, minute=0), 
+        chat_id=update.effective_chat.id,
+        name='daily_flight_check'
+    )
 
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['chat_id'] = update.effective_chat.id
@@ -94,4 +108,3 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('check', check_now))
     app.run_polling()
-    
