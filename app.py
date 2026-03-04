@@ -8,11 +8,10 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 
-# Configure the AI Brain
+# Configure the AI Brain with the explicit model path
 genai.configure(api_key=GEMINI_KEY)
-ai_brain = genai.GenerativeModel('gemini-1.5-flash')
+ai_brain = genai.GenerativeModel('models/gemini-1.5-flash')
 
-# Set up logging for the Railway console
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -20,8 +19,6 @@ logger = logging.getLogger(__name__)
 def get_flight_price(dest_entity):
     url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
     
-    # We now match the successful curl snippet's specific parameters 
-    # to ensure the API switches from 'Sample Mode' to 'Live Mode'.
     params = {
         "source": "City:amsterdam_nl",
         "destination": dest_entity,
@@ -35,7 +32,6 @@ def get_flight_price(dest_entity):
         "cabinClass": "ECONOMY",
         "sortBy": "PRICE",
         "sortOrder": "ASCENDING",
-        # Adding the specific days helps trigger live inventory
         "outbound": "SUNDAY,MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY,SATURDAY",
         "outboundDepartmentDateStart": "2026-07-01T00:00:00",
         "outboundDepartmentDateEnd": "2026-07-15T00:00:00",
@@ -55,20 +51,22 @@ def get_flight_price(dest_entity):
             data = res.json()
             itineraries = data.get('itineraries', [])
             if itineraries:
-                # Navigating to the specific price object in the v1 itineraries
-                itinerary = itineraries[0]
-                price_obj = itinerary.get('price', {})
-                # Ensure we get the actual numerical amount
+                price_obj = itineraries[0].get('price', {})
                 amount = price_obj.get('amount')
                 return f"€{amount}"
-            return "No live offers found"
-        return f"Service Error ({res.status_code})"
+            return "No live offers"
+        return f"Error {res.status_code}"
     except Exception:
         return "Search failed"
 
 # --- 3. CONCIERGE ACTIONS ---
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
+    # Determine chat_id from job or manual trigger
+    chat_id = context.job.chat_id if hasattr(context, 'job') and context.job else context.user_data.get('chat_id')
+    
+    if not chat_id:
+        return
+
     options = {
         "Hawaii": "City:honolulu_hi_us",
         "Bali": "City:denpasar_id",
@@ -87,17 +85,30 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_message(chat_id=chat_id, text=report, parse_mode='Markdown')
 
-    # Enhanced AI prompt for better reliability
     try:
         prompt = f"You are a sophisticated British Butler. Analyze these flight prices for your employer: {data_for_ai}. Be concise, polite, and highlight the best value."
         summary = ai_brain.generate_content(prompt).text
         await context.bot.send_message(chat_id=chat_id, text=f"🎩 **Concierge's Analysis:**\n{summary}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"AI Error: {e}")
+        await context.bot.send_message(chat_id=chat_id, text="*The analytical engine is momentarily offline, Sir.*")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("The Concierge is active. Daily reports at 08:00, Sir. Use /check for immediate updates.")
+    # Store chat_id for manual checks
+    context.user_data['chat_id'] = update.effective_chat.id
+    # Schedule the daily task
+    context.job_queue.run_daily(daily_brief, time=datetime.time(hour=8, minute=0), chat_id=update.effective_chat.id)
+
+async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Set context chat_id and trigger
+    context.user_data['chat_id'] = update.effective_chat.id
+    await daily_brief(context)
 
 # --- 4. LAUNCH ---
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('check', check_now))
     
