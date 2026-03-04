@@ -95,13 +95,10 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("The Concierge is active. Daily reports at 08:00, Sir. Use /check for immediate updates.")
-    # Store chat_id for manual checks
     context.user_data['chat_id'] = update.effective_chat.id
-    # Schedule the daily task
     context.job_queue.run_daily(daily_brief, time=datetime.time(hour=8, minute=0), chat_id=update.effective_chat.id)
 
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Set context chat_id and trigger
     context.user_data['chat_id'] = update.effective_chat.id
     await daily_brief(context)
 
