@@ -16,18 +16,18 @@ logger = logging.getLogger(__name__)
 def get_flight_price(dest_entity):
     url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
     
-    # Using the date format most commonly successful in v1 deployments
+    # We broaden the search by allowing stops and removing daily filters
     params = {
         "source": "City:amsterdam_nl",
         "destination": dest_entity,
         "currency": "EUR",
         "adults": 1,
         "cabinClass": "ECONOMY",
-        "maxStopsCount": 2, # Essential for Bali/Hawaii
-        "outboundDepartmentDateStart": "2026-07-01",
-        "outboundDepartmentDateEnd": "2026-07-07",
-        "inboundDepartureDateStart": "2026-07-20",
-        "inboundDepartureDateEnd": "2026-07-27",
+        "maxStopsCount": 2, # Essential for Bali and Hawaii
+        "outboundDepartmentDateStart": "2026-07-01T00:00:00",
+        "outboundDepartmentDateEnd": "2026-07-15T23:59:59", # Wider window
+        "inboundDepartureDateStart": "2026-07-20T00:00:00",
+        "inboundDepartureDateEnd": "2026-08-05T23:59:59",
         "sortBy": "PRICE",
         "limit": 1
     }
@@ -41,15 +41,16 @@ def get_flight_price(dest_entity):
         res = requests.get(url, headers=headers, params=params, timeout=20)
         if res.status_code == 200:
             data = res.json()
+            # Precisely navigating the v1 nested price structure
             if data.get('data') and len(data['data']) > 0:
-                # v1 price can be a flat number or an object
-                price_data = data['data'][0].get('price')
-                amount = price_data.get('amount') if isinstance(price_data, dict) else price_data
+                price_info = data['data'][0].get('price')
+                # Check if it's a dict with 'amount' or a direct float
+                amount = price_info.get('amount') if isinstance(price_info, dict) else price_info
                 return f"€{amount}"
-            return "No inventory (Dates restricted)"
+            return "No inventory (Strict filters)"
         return f"Error {res.status_code}"
     except Exception as e:
-        return "Search failed"
+        return "Registry unreachable"
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
