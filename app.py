@@ -20,18 +20,27 @@ logger = logging.getLogger(__name__)
 def get_flight_price(dest_entity):
     url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
     
-    # Parameters matched to Sir's successful 200 OK logs
+    # We now match the successful curl snippet's specific parameters 
+    # to ensure the API switches from 'Sample Mode' to 'Live Mode'.
     params = {
-        "fly_from": "AMS",
-        "fly_to": dest_entity,
-        "date_from": "01/07/2026",
-        "date_to": "15/07/2026",
-        "return_from": "20/07/2026",
-        "return_to": "05/08/2026",
-        "curr": "EUR",
+        "source": "City:amsterdam_nl",
+        "destination": dest_entity,
+        "currency": "EUR",
+        "locale": "en",
         "adults": 1,
-        "max_stopovers": 2,
-        "cabin_class": "economy",
+        "children": 0,
+        "infants": 0,
+        "handbags": 1,
+        "holdbags": 0,
+        "cabinClass": "ECONOMY",
+        "sortBy": "PRICE",
+        "sortOrder": "ASCENDING",
+        # Adding the specific days helps trigger live inventory
+        "outbound": "SUNDAY,MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY,SATURDAY",
+        "outboundDepartmentDateStart": "2026-07-01T00:00:00",
+        "outboundDepartmentDateEnd": "2026-07-15T00:00:00",
+        "inboundDepartureDateStart": "2026-07-20T00:00:00",
+        "inboundDepartureDateEnd": "2026-08-05T00:00:00",
         "limit": 1
     }
     
@@ -44,16 +53,17 @@ def get_flight_price(dest_entity):
         res = requests.get(url, headers=headers, params=params, timeout=20)
         if res.status_code == 200:
             data = res.json()
-            # Navigating the 'itineraries' structure identified in the ledger
             itineraries = data.get('itineraries', [])
-            if itineraries and len(itineraries) > 0:
-                price_info = itineraries[0].get('price', {})
-                amount = price_info.get('amount')
-                return f"€{amount}" if amount else "Price detail missing"
-            return "No itineraries found"
+            if itineraries:
+                # Navigating to the specific price object in the v1 itineraries
+                itinerary = itineraries[0]
+                price_obj = itinerary.get('price', {})
+                # Ensure we get the actual numerical amount
+                amount = price_obj.get('amount')
+                return f"€{amount}"
+            return "No live offers found"
         return f"Service Error ({res.status_code})"
-    except Exception as e:
-        logger.error(f"Search failed for {dest_entity}: {e}")
+    except Exception:
         return "Search failed"
 
 # --- 3. CONCIERGE ACTIONS ---
