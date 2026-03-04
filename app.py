@@ -10,7 +10,7 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 
 genai.configure(api_key=GEMINI_KEY)
-ai_brain = genai.GenerativeModel('gemini-1.5-flash')
+ai_brain = genai.GenerativeModel('gemini-1.5-flash-latest')
 logging.basicConfig(level=logging.INFO)
 
 # --- 2. TOOLS ---
