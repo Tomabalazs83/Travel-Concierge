@@ -13,16 +13,14 @@ ai_brain = genai.GenerativeModel('gemini-1.5-flash')
 logging.basicConfig(level=logging.INFO)
 
 def get_flight_price(dest_entity):
-    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
+    # Switching to 'One-way' to bypass round-trip inventory gaps
+    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/one-way"
     
-    # Using ISO 8601 format (2026-07-22T00:00:00) as required by current v1 specs
     params = {
         "source": "City:amsterdam_nl",
         "destination": dest_entity,
         "outboundDepartmentDateStart": "2026-07-01T00:00:00",
-        "outboundDepartmentDateEnd": "2026-07-07T00:00:00",
-        "inboundDepartureDateStart": "2026-07-15T00:00:00",
-        "inboundDepartureDateEnd": "2026-07-22T00:00:00",
+        "outboundDepartmentDateEnd": "2026-07-31T23:59:59", # Search the whole month
         "currency": "EUR",
         "adults": "1",
         "limit": "1",
@@ -39,13 +37,10 @@ def get_flight_price(dest_entity):
         res = requests.get(url, headers=headers, params=params, timeout=20)
         if res.status_code == 200:
             data = res.json()
-            # Navigate the specific v1 response structure
             if data.get('data') and len(data['data']) > 0:
-                # v1 often nests price within a 'price' object
-                offer = data['data'][0]
-                price_val = offer.get('price', {}).get('amount') if isinstance(offer.get('price'), dict) else offer.get('price')
-                return f"€{price_val}"
-            return "No inventory found"
+                price = data['data'][0].get('price', {}).get('amount')
+                return f"€{price} (One-way)"
+            return "No July seats found"
         return f"Status {res.status_code}"
     except Exception as e:
         return "Search error"
