@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 try:
     # Explicitly using the Gemini 3 Flash model, the 2026 production standard.
-    # Transport 'rest' ensures compatibility with containerized environments.
     genai.configure(api_key=GEMINI_KEY, transport='rest')
     ai_brain = genai.GenerativeModel(model_name="models/gemini-3-flash")
 except Exception as e:
@@ -79,7 +78,7 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_message(chat_id=chat_id, text=report, parse_mode='Markdown')
 
-    # THE ANALYTICAL ENGINE (GEMINI 3 FLASH)
+    # THE ANALYTICAL ENGINE
     try:
         prompt = f"As a polite British Butler, summarize these travel prices for Sir: {data_for_ai}. Be witty and recommend the best value."
         response = ai_brain.generate_content(prompt)
@@ -93,7 +92,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Concierge active. Daily at 08:00. Use /check now, Sir.")
     context.user_data['chat_id'] = update.effective_chat.id
     
-    # Remove existing jobs to avoid duplicates
     current_jobs = context.job_queue.get_jobs_by_name('daily_flight_check')
     for job in current_jobs: job.schedule_removal()
     
@@ -109,4 +107,10 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await daily_brief(context)
 
 # --- 4. LAUNCH ---
-if __
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('check', check_now))
+    
+    logger.info("Travel Concierge (2026 Edition) is standing by...")
+    app.run_polling()
