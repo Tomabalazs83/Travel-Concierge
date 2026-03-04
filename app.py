@@ -9,12 +9,12 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 
 # REFINED AI INITIALIZATION
+# Using 'gemini-pro' as it is the most stable and widely supported alias
 try:
     genai.configure(api_key=GEMINI_KEY)
-    # Using the explicit full-path model name for v1beta compatibility
-    ai_brain = genai.GenerativeModel('models/gemini-1.5-flash-latest')
+    ai_brain = genai.GenerativeModel('gemini-pro')
 except Exception as e:
-    print(f"Initial AI Config Error: {e}")
+    logging.error(f"AI Setup Error: {e}")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -28,7 +28,6 @@ def get_flight_price(dest_entity):
         "currency": "EUR",
         "locale": "en",
         "adults": 1,
-        "handbags": 1,
         "cabinClass": "ECONOMY",
         "sortBy": "PRICE",
         "sortOrder": "ASCENDING",
@@ -74,16 +73,15 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_message(chat_id=chat_id, text=report, parse_mode='Markdown')
 
-    # THE ANALYSIS BLOCK
     try:
-        prompt = f"You are a sophisticated British Butler. Analyze these flight prices from Amsterdam for your employer: {data_for_ai}. Be concise, witty, and recommend the best value. Address him as Sir."
+        # A simple, direct call to the analysis engine
+        prompt = f"As a polite British Butler, summarize these travel prices for Sir: {data_for_ai}. Be witty and recommend the best value."
         response = ai_brain.generate_content(prompt)
         await context.bot.send_message(chat_id=chat_id, text=f"🎩 **Concierge's Analysis:**\n{response.text}")
     except Exception as e:
         logger.error(f"AI Error: {e}")
-        # Send the actual error to Telegram so we can see what's wrong
-        error_msg = str(e)[:100]
-        await context.bot.send_message(chat_id=chat_id, text=f"⚠️ *The analytical engine encountered a hitch: {error_msg}*")
+        # Providing the actual model error to help us diagnose if 'gemini-pro' also fails
+        await context.bot.send_message(chat_id=chat_id, text=f"⚠️ *The engine reports: {str(e)[:50]}...*")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Concierge active. Daily at 08:00. Use /check now, Sir.")
