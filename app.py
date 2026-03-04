@@ -11,8 +11,8 @@ RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 # REFINED AI INITIALIZATION
 try:
     genai.configure(api_key=GEMINI_KEY)
-    # Using 'gemini-1.5-flash' which is the standard 2026 production model
-    ai_brain = genai.GenerativeModel('gemini-1.5-flash')
+    # Using the explicit full-path model name for v1beta compatibility
+    ai_brain = genai.GenerativeModel('models/gemini-1.5-flash-latest')
 except Exception as e:
     print(f"Initial AI Config Error: {e}")
 
