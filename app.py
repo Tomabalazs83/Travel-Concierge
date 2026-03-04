@@ -14,24 +14,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_flight_price(dest_entity):
-    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
-    
-    # We broaden the search by allowing stops and removing daily filters
+    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"  # seems correct from playground references
+
     params = {
-        "source": "City:amsterdam_nl",
-        "destination": dest_entity,
-        "currency": "EUR",
-        "adults": 1,
-        "cabinClass": "ECONOMY",
-        "maxStopsCount": 2, # Essential for Bali and Hawaii
-        "outboundDepartmentDateStart": "2026-07-01T00:00:00",
-        "outboundDepartmentDateEnd": "2026-07-15T23:59:59", # Wider window
-        "inboundDepartureDateStart": "2026-07-20T00:00:00",
-        "inboundDepartureDateEnd": "2026-08-05T23:59:59",
-        "sortBy": "PRICE",
-        "limit": 1
+        "fly_from": "AMS",                           # IATA is safest starting point
+        "fly_to": dest_entity,
+        "date_from": "01/07/2026",
+        "date_to": "15/07/2026",
+        "return_from": "20/07/2026",
+        "return_to": "05/08/2026",
+        "curr": "EUR",
+        "adults": "1",
+        "max_stopovers": "2",
+        "limit": "3",                                # ask for more than 1 → easier to see if anything comes back
     }
-    
+
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
         "x-rapidapi-host": "kiwi-com-cheap-flights.p.rapidapi.com"
@@ -39,18 +36,35 @@ def get_flight_price(dest_entity):
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
+
+        # ── Very important: add logging ──
+        logger.info(f"Request URL: {res.url}")
+        logger.info(f"Status: {res.status_code}")
+        if res.status_code != 200:
+            logger.warning(f"Response body: {res.text[:800]}")  # first chunk
+
         if res.status_code == 200:
             data = res.json()
-            # Precisely navigating the v1 nested price structure
-            if data.get('data') and len(data['data']) > 0:
-                price_info = data['data'][0].get('price')
-                # Check if it's a dict with 'amount' or a direct float
-                amount = price_info.get('amount') if isinstance(price_info, dict) else price_info
-                return f"€{amount}"
-            return "No inventory (Strict filters)"
-        return f"Error {res.status_code}"
+            logger.info(f"Response keys: {list(data.keys())}")
+
+            if 'data' in data and data['data']:
+                first = data['data'][0]
+                # Try different possible price locations (wrapper variations)
+                price = (
+                    first.get('price', {}).get('amount')
+                    or first.get('price')
+                    or first.get('conversion', {}).get('EUR')
+                    or first.get('fare', {}).get('amount')
+                )
+                if price:
+                    return f"€{price}"
+                return "Found result but no price field"
+            return "No data[] results"
+        return f"HTTP {res.status_code}"
+
     except Exception as e:
-        return "Registry unreachable"
+        logger.error(f"Exception: {str(e)}")
+        return "Request failed"
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
