@@ -9,16 +9,13 @@ GEMINI_KEY = os.environ.get("GEMINI_KEY")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 
 # REFINED AI INITIALIZATION
-# Using 'gemini-pro' as it is the most stable and widely supported alias
 try:
     genai.configure(api_key=GEMINI_KEY)
-    ai_brain = genai.GenerativeModel('gemini-pro')
+    # Using the exact string recommended in the Quickstart guide
+    ai_brain = genai.GenerativeModel(model_name="gemini-1.5-flash")
 except Exception as e:
     logging.error(f"AI Setup Error: {e}")
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
-logger = logging.getLogger(__name__)
-
+    
 # --- 2. FLIGHT REGISTRY TOOL ---
 def get_flight_price(dest_entity):
     url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
