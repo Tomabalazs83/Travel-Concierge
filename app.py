@@ -16,18 +16,19 @@ logger = logging.getLogger(__name__)
 def get_flight_price(dest_entity):
     url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
     
-    # Matching the exact keys and ISO format from your snippet
+    # Using the date format most commonly successful in v1 deployments
     params = {
         "source": "City:amsterdam_nl",
         "destination": dest_entity,
         "currency": "EUR",
         "adults": 1,
-        "handbags": 1,
         "cabinClass": "ECONOMY",
-        "outboundDepartmentDateStart": "2026-07-01T00:00:00",
-        "outboundDepartmentDateEnd": "2026-07-05T23:59:59",
-        "inboundDepartureDateStart": "2026-07-15T00:00:00",
-        "inboundDepartureDateEnd": "2026-07-20T23:59:59",
+        "maxStopsCount": 2, # Essential for Bali/Hawaii
+        "outboundDepartmentDateStart": "2026-07-01",
+        "outboundDepartmentDateEnd": "2026-07-07",
+        "inboundDepartureDateStart": "2026-07-20",
+        "inboundDepartureDateEnd": "2026-07-27",
+        "sortBy": "PRICE",
         "limit": 1
     }
     
@@ -38,20 +39,17 @@ def get_flight_price(dest_entity):
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
-        logger.info(f"API Call for {dest_entity}: Status {res.status_code}")
-        
         if res.status_code == 200:
             data = res.json()
-            # Navigating the v1 structure: data -> list -> price -> amount
             if data.get('data') and len(data['data']) > 0:
-                price_obj = data['data'][0].get('price', {})
-                # Some v1 responses use 'amount', others just return the number
-                amount = price_obj.get('amount') if isinstance(price_obj, dict) else price_obj
+                # v1 price can be a flat number or an object
+                price_data = data['data'][0].get('price')
+                amount = price_data.get('amount') if isinstance(price_data, dict) else price_data
                 return f"€{amount}"
-            return "No inventory found"
+            return "No inventory (Dates restricted)"
         return f"Error {res.status_code}"
     except Exception as e:
-        return "Search error"
+        return "Search failed"
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
