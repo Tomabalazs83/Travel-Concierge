@@ -83,28 +83,17 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     for name, entity in options.items():
         price = get_flight_price(entity)
         report += f"✈️ **{name}**: {price}\n"
-        data_for_ai += f"{name}: {price}. "
+        data_for_ai += f"The price for {name} is {price}. "
     
-    # Send the raw flight data
     await context.bot.send_message(chat_id=chat_id, text=report, parse_mode='Markdown')
 
-    # Attempt AI summary
+    # Enhanced AI prompt for better reliability
     try:
-        summary = ai_brain.generate_content(f"Analyze these travel prices for a British gentleman: {data_for_ai}").text
-        await context.bot.send_message(chat_id=chat_id, text=f"🎩 **Analysis:**\n{summary}")
-    except Exception as e:
-        logger.error(f"AI Error: {e}")
-        await context.bot.send_message(chat_id=chat_id, text="*The analytical engine is momentarily offline, Sir.*")
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("The Concierge is active. Daily reports at 08:00, Sir.")
-    context.job_queue.run_daily(daily_brief, time=datetime.time(hour=8, minute=0), chat_id=update.effective_chat.id)
-
-async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Triggers the briefing immediately
-    class DummyJob: chat_id = update.effective_chat.id
-    context.job = DummyJob()
-    await daily_brief(context)
+        prompt = f"You are a sophisticated British Butler. Analyze these flight prices for your employer: {data_for_ai}. Be concise, polite, and highlight the best value."
+        summary = ai_brain.generate_content(prompt).text
+        await context.bot.send_message(chat_id=chat_id, text=f"🎩 **Concierge's Analysis:**\n{summary}")
+    except Exception:
+        pass
 
 # --- 4. LAUNCH ---
 if __name__ == '__main__':
