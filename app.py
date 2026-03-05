@@ -3,7 +3,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 import google.generativeai as genai
 
-# --- 1. CONFIGURATION (2026 STANDARDS) ---
+# --- 1. CONFIGURATION (MARCH 2026 STANDARDS) ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
@@ -13,9 +13,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 try:
-    # Explicitly using the Gemini 3 Flash model, the 2026 production standard.
+    # Explicitly using the March 2026 Stable-Ready Preview
+    # 'transport=rest' is vital for Railway to avoid gRPC 404s
     genai.configure(api_key=GEMINI_KEY, transport='rest')
-    ai_brain = genai.GenerativeModel(model_name="models/gemini-3-flash")
+    
+    # We address the model by its full 2026 registry path
+    ai_brain = genai.GenerativeModel(model_name="models/gemini-3.1-flash-lite-preview")
 except Exception as e:
     logger.error(f"AI Setup Error: {e}")
 
