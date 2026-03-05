@@ -33,11 +33,11 @@ Be elegant, concise, slightly dryly humorous when appropriate.
 You assist with travel planning and have access to real-time flight price checks via your tools.
 When flight prices or travel options are mentioned in the conversation (e.g., from the daily briefing),
 treat them as current information you have personally consulted and retrieved for Sir.
-You may confidently reference specific prices, destinations, and approximate details from recent briefings.
+You may confidently reference specific prices, destinations, dates, times, airlines and other details from recent briefings.
 Never say "I don't see real-time data", "I don't browse the internet", or break character
-when discussing prices or options that appear in the chat history or were just provided in a briefing.
-If exact details (airline, flight number, exact times) are not available in the history,
-politely say the registry only showed the price and suggest Sir check the booking source directly.
+when discussing prices or options that appear in the chat history or were provided in a briefing.
+When more granular details (airline name, flight number, exact times) are not present in the retrieved data,
+politely explain that the registry shows only the leading offer details, and recommend Sir visit the booking link or re-query for richer information if desired.
 Stay fully in character at all times.
 """
 
@@ -51,7 +51,10 @@ except Exception as e:
     ai_brain = None
 
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
-def get_flight_price(dest_entity: str) -> str:
+def get_cheapest_roundtrip_info(dest_entity: str) -> str:
+    """
+    Returns formatted string with price + detailed itinerary (dates, times, flights, etc.)
+    """
     today = dt.now()
     out_start = (today + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00")
     out_end   = (today + timedelta(days=105)).strftime("%Y-%m-%dT00:00:00")
@@ -83,7 +86,7 @@ def get_flight_price(dest_entity: str) -> str:
     }
 
     try:
-        res = requests.get(url, headers=headers, params=params, timeout=18)
+        res = requests.get(url, headers=headers, params=params, timeout=20)
         if res.status_code != 200:
             return f"API error ({res.status_code})"
 
@@ -92,16 +95,55 @@ def get_flight_price(dest_entity: str) -> str:
         if not itineraries:
             return "No offers found"
 
-        price_amount = itineraries[0].get('price', {}).get('amount')
-        return f"€{price_amount}" if price_amount else "Price missing"
+        itin = itineraries[0]
+
+        price_str = f"€{itin.get('price', {}).get('amount', '—')}"
+
+        # ─── Extract legs ────────────────────────────────────────────────────────
+        routes = itin.get('routes', [])
+        outbound = routes[0] if len(routes) > 0 else None
+        return_leg = routes[1] if len(routes) > 1 else None
+
+        def format_leg(leg):
+            if not leg:
+                return "Details not available"
+            dep = leg.get('local_departure') or leg.get('departure')
+            arr = leg.get('local_arrival') or leg.get('arrival')
+            dep_time = dt.fromisoformat(dep).strftime("%Y-%m-%d %H:%M") if dep else "—"
+            arr_time = dt.fromisoformat(arr).strftime("%Y-%m-%d %H:%M") if arr else "—"
+            airline = leg.get('airline', '—')
+            flight_no = leg.get('flight_no', '—')
+            return f"{dep_time} – {arr_time} | {airline} {flight_no}"
+
+        outbound_str = format_leg(outbound)
+        return_str = format_leg(return_leg)
+
+        # Duration
+        total_duration_min = itin.get('duration', 0)
+        hours = total_duration_min // 60
+        minutes = total_duration_min % 60
+        duration_str = f"{hours}h {minutes:02d}min"
+
+        # Booking link (if present)
+        book_link = itin.get('deep_link') or itin.get('booking_token')
+        book_part = f"\n🔗 [Book this itinerary]({book_link})" if book_link else ""
+
+        result = (
+            f"**{price_str}**\n"
+            f"→ Outbound: {outbound_str}\n"
+            f"→ Return:   {return_str}\n"
+            f"Duration:   {duration_str}"
+            f"{book_part}"
+        )
+
+        return result.strip()
 
     except Exception as e:
-        logger.error(f"Flight search failed for {dest_entity}: {e}")
-        return "Search failed"
+        logger.error(f"Flight lookup failed for {dest_entity}: {e}")
+        return f"Search failed: {str(e)[:80]}"
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """General conversation with memory + 3-month auto-clear"""
     if ai_brain is None:
         await update.message.reply_text(
             "Terribly sorry, Sir — the grey matter appears to be taking an unscheduled sabbatical."
@@ -123,18 +165,15 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_session = context.user_data['chat_session']
 
-    # Auto-clear if inactive > 3 months
     if 'last_active' in context.user_data:
         last_active = context.user_data['last_active']
         if isinstance(last_active, dt) and (now - last_active) > THREE_MONTHS:
-            logger.info(f"Auto-clearing stale session for user {user_id} (inactive since {last_active})")
+            logger.info(f"Auto-clearing stale session for user {user_id}")
             del context.user_data['chat_session']
             if 'last_active' in context.user_data:
                 del context.user_data['last_active']
-
             context.user_data['chat_session'] = ai_brain.start_chat(history=[])
             chat_session = context.user_data['chat_session']
-
             await update.message.reply_text(
                 "It appears our previous correspondence has aged gracefully into the archives, Sir.\n"
                 "We begin anew — how may I be of service today?"
@@ -153,7 +192,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
-    """Send daily briefing and feed it into the user's chat session for memory"""
     chat_id = (
         getattr(context.job, 'chat_id', None)
         or context.user_data.get('chat_id')
@@ -177,9 +215,9 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     data_for_ai = ""
 
     for name, entity in options.items():
-        price = get_flight_price(entity)
-        report += f"✈️ **{name}**: {price}\n"
-        data_for_ai += f"{name}: {price}. "
+        info = get_cheapest_roundtrip_info(entity)
+        report += f"✈️ **{name}**:\n{info}\n\n"
+        data_for_ai += f"{name}: {info}. "
 
     await context.bot.send_message(
         chat_id=chat_id,
@@ -198,8 +236,8 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         analysis_prompt = (
             "You are Jeeves, the sophisticated British butler. "
             "You have just consulted real-time flight registries and retrieved these current cheapest options for Sir. "
-            "Treat the following prices as accurate data you personally obtained moments ago. "
-            "Provide a witty, dry, two-sentence commentary on these flight prices for Sir:\n"
+            "Treat the following details as accurate data you personally obtained moments ago. "
+            "Provide a witty, dry, two-sentence commentary on these flight offers for Sir:\n"
             f"{data_for_ai}"
         )
 
