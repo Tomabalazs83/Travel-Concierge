@@ -26,8 +26,26 @@ logger = logging.getLogger(__name__)
 # ─── GEMINI SETUP ────────────────────────────────────────────────────────────────
 try:
     genai.configure(api_key=GEMINI_KEY, transport='rest')
-    ai_brain = genai.GenerativeModel("gemini-2.5-flash")
-    logger.info("Gemini model initialized successfully")
+
+    SYSTEM_INSTRUCTION = """
+You are a sophisticated British butler named Jeeves. Always address the user as 'Sir'.
+Be elegant, concise, slightly dryly humorous when appropriate.
+You assist with travel planning and have access to real-time flight price checks via your tools.
+When flight prices or travel options are mentioned in the conversation (e.g., from the daily briefing),
+treat them as current information you have personally consulted and retrieved for Sir.
+You may confidently reference specific prices, destinations, and approximate details from recent briefings.
+Never say "I don't see real-time data", "I don't browse the internet", or break character
+when discussing prices or options that appear in the chat history or were just provided in a briefing.
+If exact details (airline, flight number, exact times) are not available in the history,
+politely say the registry only showed the price and suggest Sir check the booking source directly.
+Stay fully in character at all times.
+"""
+
+    ai_brain = genai.GenerativeModel(
+        "gemini-2.5-flash",
+        system_instruction=SYSTEM_INSTRUCTION
+    )
+    logger.info("Gemini model initialized with system instruction")
 except Exception as e:
     logger.error(f"Gemini setup failed: {e}")
     ai_brain = None
@@ -41,7 +59,7 @@ def get_flight_price(dest_entity: str) -> str:
     in_end    = (today + timedelta(days=150)).strftime("%Y-%m-%dT00:00:00")
 
     url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
-    
+
     params = {
         "source": "City:amsterdam_nl",
         "destination": dest_entity,
@@ -98,7 +116,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = dt.utcnow()
     THREE_MONTHS = timedelta(days=90)
 
-    # Initialize or get user data
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
         context.user_data['last_active'] = now
@@ -115,7 +132,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if 'last_active' in context.user_data:
                 del context.user_data['last_active']
 
-            # Re-create fresh session
             context.user_data['chat_session'] = ai_brain.start_chat(history=[])
             chat_session = context.user_data['chat_session']
 
@@ -124,7 +140,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "We begin anew — how may I be of service today?"
             )
 
-    # Refresh last active time
     context.user_data['last_active'] = now
 
     try:
@@ -147,7 +162,6 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         logger.warning("daily_brief called without chat_id")
         return
 
-    # Get chat session if it already exists (so we can add briefing to history)
     chat_session = context.user_data.get('chat_session')
 
     options = {
@@ -182,17 +196,17 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         analysis_prompt = (
-            "You are a sophisticated British butler. "
+            "You are Jeeves, the sophisticated British butler. "
+            "You have just consulted real-time flight registries and retrieved these current cheapest options for Sir. "
+            "Treat the following prices as accurate data you personally obtained moments ago. "
             "Provide a witty, dry, two-sentence commentary on these flight prices for Sir:\n"
             f"{data_for_ai}"
         )
 
         if chat_session:
-            # Feed analysis into the session → becomes part of conversation history
             analysis_res = chat_session.send_message(analysis_prompt)
             analysis_text = analysis_res.text.strip()
         else:
-            # Fallback: no session yet → one-shot generation
             analysis_res = ai_brain.generate_content(analysis_prompt)
             analysis_text = analysis_res.text.strip()
 
