@@ -79,51 +79,60 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
             return "No offers found for the selected period, Sir."
 
         itin = itineraries[0]
-        # The 'route' is where the individual flight segments live
-        route = itin.get('route', [])
+        # Attempt to find the segment list in all known possible keys
+        segments = itin.get('route') or itin.get('sectors') or itin.get('parts') or []
         
         price = f"€{itin.get('price', {}).get('amount', '—')}"
+        duration = itin.get('fly_duration') or itin.get('duration') or "—"
         
+        # Fallback if no deep segment data is found
+        if not segments:
+            airlines = itin.get('airlines', []) or itin.get('airlines_codes', [])
+            airline_str = ", ".join(airlines) if airlines else "Multiple Carriers"
+            return (
+                f"💰 **{price}**\n"
+                f"⚠️ *Detailed segment data is currently restricted by the provider, Sir.*\n"
+                f"✈️ **Carriers:** {airline_str}\n"
+                f"⏱ **Total Travel:** {duration}\n"
+                f"🔗 [View Itinerary]({itin.get('deep_link')})"
+            )
+
         # Split segments by 'return' flag
-        out_segments = [s for s in route if s.get('return') == 0]
-        ret_segments = [s for s in route if s.get('return') == 1]
+        out_segments = [s for s in segments if s.get('return') == 0]
+        ret_segments = [s for s in segments if s.get('return') == 1]
 
         def format_time(seg):
-            # Try ISO local time first, then Unix timestamps
-            raw = seg.get('local_departure') or seg.get('departure')
-            if not raw:
-                unix = seg.get('dTime') or seg.get('dTimeUTC')
-                if unix:
-                    return dt.fromtimestamp(unix).strftime("%d %b, %H:%M")
-                return "—"
-            try:
-                return dt.fromisoformat(raw.replace('Z', '')).strftime("%d %b, %H:%M")
-            except:
-                return raw[:16]
+            # Exhaustive check for time keys
+            raw = seg.get('local_departure') or seg.get('departure') or seg.get('dTime')
+            if isinstance(raw, int): # Handle Unix Timestamps
+                return dt.fromtimestamp(raw).strftime("%d %b, %H:%M")
+            if isinstance(raw, str): # Handle ISO Strings
+                try: return dt.fromisoformat(raw.replace('Z', '')).strftime("%d %b, %H:%M")
+                except: return raw[:16]
+            return "—"
 
-        def parse_leg(segments):
-            if not segments: return "No details", "—", "—", 0
+        def parse_leg(leg_segs):
+            if not leg_segs: return "Details unavailable", "—", "—", 0
             
-            # Airlines and flight numbers
-            f_details = []
-            for s in segments:
-                # Use 'airline' or 'operating_carrier'
-                carrier = s.get('airline') or s.get('operating_carrier') or "??"
-                num = s.get('flight_no') or s.get('operating_flight_no') or ""
-                f_details.append(f"{carrier}{num}")
+            f_numbers = []
+            for s in leg_segs:
+                carrier = s.get('airline') or s.get('operating_carrier') or "✈️"
+                num = s.get('flight_no') or s.get('no') or ""
+                f_numbers.append(f"{carrier}{num}")
             
-            dep_t = format_time(segments[0])
-            # For arrival time, we look at the last segment in the leg
-            arr_raw = segments[-1].get('local_arrival') or segments[-1].get('arrival')
-            if not arr_raw:
-                unix = segments[-1].get('aTime') or segments[-1].get('aTimeUTC')
-                arr_t = dt.fromtimestamp(unix).strftime("%d %b, %H:%M") if unix else "—"
+            dep = format_time(leg_segs[0])
+            # For arrival, check local_arrival or aTime
+            arr_raw = leg_segs[-1].get('local_arrival') or leg_segs[-1].get('arrival') or leg_segs[-1].get('aTime')
+            if isinstance(arr_raw, int):
+                arr = dt.fromtimestamp(arr_raw).strftime("%d %b, %H:%M")
+            elif isinstance(arr_raw, str):
+                try: arr = dt.fromisoformat(arr_raw.replace('Z', '')).strftime("%d %b, %H:%M")
+                except: arr = arr_raw[:16]
             else:
-                try: arr_t = dt.fromisoformat(arr_raw.replace('Z', '')).strftime("%d %b, %H:%M")
-                except: arr_t = arr_raw[:16]
+                arr = "—"
 
-            stops = len(segments) - 1
-            return ", ".join(f_details), dep_t, arr_t, stops
+            stops = len(leg_segs) - 1
+            return ", ".join(f_numbers), dep, arr, stops
 
         out_f, out_dep, out_arr, out_s = parse_leg(out_segments)
         ret_f, ret_dep, ret_arr, ret_s = parse_leg(ret_segments)
@@ -137,13 +146,13 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
             f"   Flights: {out_f} ({out_s} stops)\n"
             f"🛬 **Return:** {ret_dep} → {ret_arr}\n"
             f"   Flights: {ret_f} ({ret_s} stops)\n"
-            f"⏱ **Total Travel:** {itin.get('fly_duration', '—')}"
+            f"⏱ **Total Travel:** {duration}"
             f"{link_part}"
         )
 
     except Exception as e:
-        logger.error(f"Detailed flight processing failed: {e}")
-        return "The registry's ink appears to have faded for these details, Sir."
+        logger.error(f"Deep Scan failed: {e}")
+        return "The details are currently obscured within the registry, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
