@@ -95,7 +95,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    now = dt.utcnow()  # UTC is safer for timestamp consistency across servers
+    now = dt.utcnow()
     THREE_MONTHS = timedelta(days=90)
 
     # Initialize or get user data
@@ -106,7 +106,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_session = context.user_data['chat_session']
 
-    # Check for inactivity > 3 months → reset session
+    # Auto-clear if inactive > 3 months
     if 'last_active' in context.user_data:
         last_active = context.user_data['last_active']
         if isinstance(last_active, dt) and (now - last_active) > THREE_MONTHS:
@@ -124,7 +124,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "We begin anew — how may I be of service today?"
             )
 
-    # Update last active timestamp (every message refreshes it)
+    # Refresh last active time
     context.user_data['last_active'] = now
 
     try:
@@ -138,6 +138,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
+    """Send daily briefing and feed it into the user's chat session for memory"""
     chat_id = (
         getattr(context.job, 'chat_id', None)
         or context.user_data.get('chat_id')
@@ -145,6 +146,9 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     if not chat_id:
         logger.warning("daily_brief called without chat_id")
         return
+
+    # Get chat session if it already exists (so we can add briefing to history)
+    chat_session = context.user_data.get('chat_session')
 
     options = {
         "Hawaii":  "City:honolulu_hi_us",
@@ -182,12 +186,22 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
             "Provide a witty, dry, two-sentence commentary on these flight prices for Sir:\n"
             f"{data_for_ai}"
         )
-        res = ai_brain.generate_content(analysis_prompt)
+
+        if chat_session:
+            # Feed analysis into the session → becomes part of conversation history
+            analysis_res = chat_session.send_message(analysis_prompt)
+            analysis_text = analysis_res.text.strip()
+        else:
+            # Fallback: no session yet → one-shot generation
+            analysis_res = ai_brain.generate_content(analysis_prompt)
+            analysis_text = analysis_res.text.strip()
+
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🎩 **Butler’s insight:**\n{res.text.strip()}",
+            text=f"🎩 **Butler’s insight:**\n{analysis_text}",
             parse_mode='Markdown'
         )
+
     except Exception as e:
         logger.error(f"Analysis failed: {e}")
         await context.bot.send_message(
