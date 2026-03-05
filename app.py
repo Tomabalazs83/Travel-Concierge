@@ -11,7 +11,6 @@ from telegram.ext import (
     MessageHandler,
     filters,
     ContextTypes,
-    PicklePersistence
 )
 
 import google.generativeai as genai
@@ -27,7 +26,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Early exit if critical env vars are missing
+# Early exit if critical env var is missing
 if not TELEGRAM_TOKEN:
     logger.critical("TELEGRAM_TOKEN is missing → cannot start bot")
     exit(1)
@@ -214,7 +213,7 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
                 text="Regrettably, Sir, I encountered an unexpected difficulty while preparing your briefing."
             )
         except:
-            pass  # if even sending fails, give up quietly
+            pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -225,7 +224,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Use /check for an immediate briefing, or simply speak to me."
     )
 
-    # Clean up old jobs to prevent duplicates
     current_jobs = context.job_queue.get_jobs_by_name('daily_flight_check')
     for job in current_jobs:
         job.schedule_removal()
@@ -246,16 +244,14 @@ if __name__ == '__main__':
     logger.info("Starting butler bot...")
 
     try:
-        # Optional: add persistence if you want user_data to survive restarts
-        # persistence = PicklePersistence(filepath="bot_data.pkl")
-
-        app = ApplicationBuilder() \
-            .token(TELEGRAM_TOKEN) \
-            .get_updates_read_timeout(30) \
-            .get_updates_write_timeout(30) \
-            .get_updates_pool_timeout(30) \
-            # .persistence(persistence)  # uncomment if you want persistence
+        app = (
+            ApplicationBuilder()
+            .token(TELEGRAM_TOKEN)
+            .get_updates_read_timeout(30)
+            .get_updates_write_timeout(30)
+            .get_updates_pool_timeout(30)
             .build()
+        )
 
         app.add_handler(CommandHandler('start', start))
         app.add_handler(CommandHandler('check', check_now))
