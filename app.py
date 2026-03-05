@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 # --- 2. MODERN AI SETUP (SDK v2.0) ---
 try:
     client = genai.Client(api_key=GEMINI_KEY)
-    MODEL_ID = "gemini-2.5-flash" 
+    # Upgrading to the high-efficiency 3.1 Flash-Lite model
+    MODEL_ID = "gemini-3.1-flash-lite" 
     SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty, dry, and concise."
-    logger.info("Gemini 2.5 client initialized successfully.")
+    logger.info("Gemini 3.1 Flash-Lite client initialized.")
 except Exception as e:
     logger.error(f"AI Setup failed: {e}")
     client = None
