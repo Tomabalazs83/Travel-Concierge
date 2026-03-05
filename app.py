@@ -2,6 +2,7 @@ import os
 import requests
 import datetime
 import logging
+import json
 from datetime import datetime as dt, timedelta
 
 from telegram import Update
@@ -53,7 +54,7 @@ except Exception as e:
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
     """
-    Returns formatted string with price + detailed itinerary (dates, times, flights, etc.)
+    Attempts to extract as much itinerary detail as possible from the API response.
     """
     today = dt.now()
     out_start = (today + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00")
@@ -87,49 +88,58 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
-        if res.status_code != 200:
-            return f"API error ({res.status_code})"
+        res.raise_for_status()
 
         data = res.json()
         itineraries = data.get('itineraries', [])
         if not itineraries:
-            return "No offers found"
+            return "No offers found for the selected period."
 
         itin = itineraries[0]
 
-        price_str = f"€{itin.get('price', {}).get('amount', '—')}"
+        # ── DEBUG: Log raw structure once per destination ────────────────────────
+        logger.info(f"Raw itinerary keys for {dest_entity}: {list(itin.keys())}")
+        # Optional: log full structure (comment out after debugging)
+        # logger.debug(f"Full itinerary for {dest_entity}:\n{json.dumps(itin, indent=2)}")
 
-        # ─── Extract legs ────────────────────────────────────────────────────────
-        routes = itin.get('routes', [])
-        outbound = routes[0] if len(routes) > 0 else None
-        return_leg = routes[1] if len(routes) > 1 else None
-
-        def format_leg(leg):
-            if not leg:
-                return "Details not available"
-            dep = leg.get('local_departure') or leg.get('departure')
-            arr = leg.get('local_arrival') or leg.get('arrival')
-            dep_time = dt.fromisoformat(dep).strftime("%Y-%m-%d %H:%M") if dep else "—"
-            arr_time = dt.fromisoformat(arr).strftime("%Y-%m-%d %H:%M") if arr else "—"
-            airline = leg.get('airline', '—')
-            flight_no = leg.get('flight_no', '—')
-            return f"{dep_time} – {arr_time} | {airline} {flight_no}"
-
-        outbound_str = format_leg(outbound)
-        return_str = format_leg(return_leg)
+        price_amount = itin.get('price', {}).get('amount', '—')
+        price_str = f"€{price_amount}"
 
         # Duration
-        total_duration_min = itin.get('duration', 0)
-        hours = total_duration_min // 60
-        minutes = total_duration_min % 60
-        duration_str = f"{hours}h {minutes:02d}min"
+        duration_min = itin.get('duration', 0) or itin.get('fly_duration', 0) or 0
+        hours = duration_min // 60
+        mins = duration_min % 60
+        duration_str = f"{hours}h {mins:02d}min" if duration_min > 0 else "Duration not provided"
 
-        # Booking link (if present)
-        book_link = itin.get('deep_link') or itin.get('booking_token')
-        book_part = f"\n🔗 [Book this itinerary]({book_link})" if book_link else ""
+        # Departure / arrival times (try multiple possible keys)
+        out_dep = itin.get('local_departure') or itin.get('departure') or itin.get('dTimeUTC') or itin.get('dTime') or "—"
+        out_arr = itin.get('local_arrival')   or itin.get('arrival')   or itin.get('aTimeUTC') or itin.get('aTime') or "—"
+        ret_dep = itin.get('return_local_departure') or itin.get('return_departure') or "—"
+        ret_arr = itin.get('return_local_arrival')   or itin.get('return_arrival')   or "—"
+
+        def format_time(t_str):
+            if t_str == "—":
+                return "—"
+            try:
+                # Try common ISO formats
+                return dt.fromisoformat(t_str.replace('Z', '+00:00')).strftime("%Y-%m-%d %H:%M")
+            except:
+                return t_str[:16] if len(t_str) > 16 else t_str  # truncate long strings
+
+        outbound_str = f"{format_time(out_dep)} – {format_time(out_arr)}"
+        return_str   = f"{format_time(ret_dep)} – {format_time(ret_arr)}"
+
+        # Airlines
+        airlines = itin.get('airlines', []) or itin.get('airline', []) or []
+        airline_text = ", ".join(airlines) if airlines else "Airline(s) not specified"
+
+        # Booking link
+        book_link = itin.get('deep_link') or itin.get('booking_token') or itin.get('link') or itin.get('href')
+        book_part = f"\n🔗 [View / Book]({book_link})" if book_link else ""
 
         result = (
             f"**{price_str}**\n"
+            f"Airlines: {airline_text}\n"
             f"→ Outbound: {outbound_str}\n"
             f"→ Return:   {return_str}\n"
             f"Duration:   {duration_str}"
@@ -138,9 +148,12 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
 
         return result.strip()
 
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API request failed for {dest_entity}: {e}")
+        return f"API error ({getattr(res, 'status_code', 'unknown')})"
     except Exception as e:
-        logger.error(f"Flight lookup failed for {dest_entity}: {e}")
-        return f"Search failed: {str(e)[:80]}"
+        logger.error(f"Flight processing failed for {dest_entity}: {e}")
+        return "Unable to extract detailed flight information at this time."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
