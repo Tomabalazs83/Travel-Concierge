@@ -10,7 +10,8 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     filters,
-    ContextTypes
+    ContextTypes,
+    PicklePersistence
 )
 
 import google.generativeai as genai
@@ -20,35 +21,28 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY     = os.environ.get("GEMINI_KEY")
 RAPIDAPI_KEY   = os.environ.get("RAPIDAPI_KEY")
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
+# Early exit if critical env vars are missing
+if not TELEGRAM_TOKEN:
+    logger.critical("TELEGRAM_TOKEN is missing → cannot start bot")
+    exit(1)
+
 # ─── GEMINI SETUP ────────────────────────────────────────────────────────────────
+ai_brain = None
 try:
-    genai.configure(api_key=GEMINI_KEY, transport='rest')
-
-    SYSTEM_INSTRUCTION = """
-You are a sophisticated British butler named Jeeves. Always address the user as 'Sir'.
-Be elegant, concise, slightly dryly humorous when appropriate.
-You assist with travel planning and have access to real-time flight price checks via your tools.
-When flight prices or travel options are mentioned in the conversation (e.g., from the daily briefing),
-treat them as current information you have personally consulted and retrieved for Sir.
-You may confidently reference specific prices, destinations, and approximate details from recent briefings.
-Never say "I don't see real-time data", "I don't browse the internet", or break character
-when discussing prices or options that appear in the chat history or were provided in a briefing.
-If exact details like airline/flight number are not in the history,
-politely say the registry only showed the price and suggest Sir check the booking source directly.
-Stay fully in character at all times.
-"""
-
-    ai_brain = genai.GenerativeModel(
-        "gemini-2.5-flash",
-        system_instruction=SYSTEM_INSTRUCTION
-    )
-    logger.info("Gemini model initialized with system instruction")
+    if not GEMINI_KEY:
+        logger.warning("GEMINI_KEY missing → chat & analysis will be disabled")
+    else:
+        genai.configure(api_key=GEMINI_KEY, transport='rest')
+        ai_brain = genai.GenerativeModel("gemini-2.5-flash")
+        logger.info("Gemini model initialized successfully")
 except Exception as e:
-    logger.error(f"Gemini setup failed: {e}")
-    ai_brain = None
+    logger.error(f"Failed to initialize Gemini: {e}", exc_info=True)
 
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_flight_price(dest_entity: str) -> str:
@@ -85,6 +79,7 @@ def get_flight_price(dest_entity: str) -> str:
     try:
         res = requests.get(url, headers=headers, params=params, timeout=18)
         if res.status_code != 200:
+            logger.warning(f"Flight API returned {res.status_code} for {dest_entity}")
             return f"API error ({res.status_code})"
 
         data = res.json()
@@ -93,17 +88,17 @@ def get_flight_price(dest_entity: str) -> str:
             return "No offers found"
 
         price_amount = itineraries[0].get('price', {}).get('amount')
-        return f"€{price_amount}" if price_amount else "Price missing"
+        return f"€{price_amount}" if price_amount is not None else "Price missing"
 
     except Exception as e:
-        logger.error(f"Flight search failed for {dest_entity}: {e}")
+        logger.error(f"Flight search failed for {dest_entity}: {e}", exc_info=True)
         return "Search failed"
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ai_brain is None:
         await update.message.reply_text(
-            "Terribly sorry, Sir — the grey matter appears to be taking an unscheduled sabbatical."
+            "Terribly sorry, Sir — my thinking apparatus is currently indisposed."
         )
         return
 
@@ -132,8 +127,8 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['chat_session'] = ai_brain.start_chat(history=[])
             chat_session = context.user_data['chat_session']
             await update.message.reply_text(
-                "It appears our previous correspondence has aged gracefully into the archives, Sir.\n"
-                "We begin anew — how may I be of service today?"
+                "Our previous correspondence has gracefully retired to the archives, Sir.\n"
+                "We begin anew — how may I assist you today?"
             )
 
     context.user_data['last_active'] = now
@@ -143,9 +138,9 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = response.text.strip()
         await update.message.reply_text(text)
     except Exception as e:
-        logger.error(f"Gemini chat error for user {user_id}: {e}")
+        logger.error(f"Gemini chat error for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text(
-            "A most regrettable disturbance in the ether, Sir. Shall we try again?"
+            "A regrettable disturbance in the ether, Sir. Shall we try again?"
         )
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
@@ -157,8 +152,6 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         logger.warning("daily_brief called without chat_id")
         return
 
-    chat_session = context.user_data.get('chat_session')
-
     options = {
         "Hawaii":  "City:honolulu_hi_us",
         "Bali":    "City:denpasar_id",
@@ -166,57 +159,62 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         "London":  "City:london_gb"
     }
 
-    await context.bot.send_message(chat_id=chat_id, text="Consulting the summer registries, Sir...")
-
-    report = "🛎 **Travel Concierge Summer Briefing, Sir**\n\n"
-    data_for_ai = ""
-
-    for name, entity in options.items():
-        price = get_flight_price(entity)
-        report += f"✈️ **{name}**: {price}\n"
-        data_for_ai += f"{name}: {price}. "
-
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=report,
-        parse_mode='Markdown'
-    )
-
-    if ai_brain is None:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="The analytical engine is indisposed this morning, Sir."
-        )
-        return
-
     try:
-        analysis_prompt = (
-            "You are Jeeves, the sophisticated British butler. "
-            "You have just consulted real-time flight registries and retrieved these current cheapest options for Sir. "
-            "Treat the following prices as accurate data you personally obtained moments ago. "
-            "Provide a witty, dry, two-sentence commentary on these flight prices for Sir:\n"
-            f"{data_for_ai}"
-        )
+        await context.bot.send_message(chat_id=chat_id, text="Consulting the summer registries, Sir...")
 
-        if chat_session:
-            analysis_res = chat_session.send_message(analysis_prompt)
-            analysis_text = analysis_res.text.strip()
-        else:
-            analysis_res = ai_brain.generate_content(analysis_prompt)
-            analysis_text = analysis_res.text.strip()
+        report = "🛎 **Travel Concierge Summer Briefing, Sir**\n\n"
+        data_for_ai = ""
+
+        for name, entity in options.items():
+            price = get_flight_price(entity)
+            report += f"✈️ **{name}**: {price}\n"
+            data_for_ai += f"{name}: {price}. "
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f"🎩 **Butler’s insight:**\n{analysis_text}",
+            text=report,
             parse_mode='Markdown'
         )
 
-    except Exception as e:
-        logger.error(f"Analysis failed: {e}")
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="The analytical department appears to be taking tea at present, Sir."
+        if ai_brain is None:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="The analytical engine is indisposed this morning, Sir."
+            )
+            return
+
+        analysis_prompt = (
+            "You are a sophisticated British butler. "
+            "Provide a witty, dry, two-sentence analysis of these flight prices for Sir: "
+            f"{data_for_ai}"
         )
+
+        try:
+            if 'chat_session' in context.user_data:
+                res = context.user_data['chat_session'].send_message(analysis_prompt)
+            else:
+                res = ai_brain.generate_content(analysis_prompt)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"🎩 **Butler’s insight:**\n{res.text.strip()}",
+                parse_mode='Markdown'
+            )
+        except Exception as analysis_err:
+            logger.error(f"Analysis failed: {analysis_err}", exc_info=True)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="The analytical department appears to be taking tea at present, Sir."
+            )
+
+    except Exception as e:
+        logger.error(f"daily_brief failed: {e}", exc_info=True)
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="Regrettably, Sir, I encountered an unexpected difficulty while preparing your briefing."
+            )
+        except:
+            pass  # if even sending fails, give up quietly
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -227,6 +225,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Use /check for an immediate briefing, or simply speak to me."
     )
 
+    # Clean up old jobs to prevent duplicates
     current_jobs = context.job_queue.get_jobs_by_name('daily_flight_check')
     for job in current_jobs:
         job.schedule_removal()
@@ -244,15 +243,32 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    if not TELEGRAM_TOKEN:
-        logger.error("TELEGRAM_TOKEN environment variable missing")
-        exit(1)
+    logger.info("Starting butler bot...")
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    try:
+        # Optional: add persistence if you want user_data to survive restarts
+        # persistence = PicklePersistence(filepath="bot_data.pkl")
 
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('check', check_now))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+        app = ApplicationBuilder() \
+            .token(TELEGRAM_TOKEN) \
+            .get_updates_read_timeout(30) \
+            .get_updates_write_timeout(30) \
+            .get_updates_pool_timeout(30) \
+            # .persistence(persistence)  # uncomment if you want persistence
+            .build()
 
-    logger.info("Butler bot starting...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+        app.add_handler(CommandHandler('start', start))
+        app.add_handler(CommandHandler('check', check_now))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+
+        logger.info("Bot handlers registered. Starting polling...")
+        app.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+            poll_interval=0.5,
+            timeout=20
+        )
+
+    except Exception as fatal:
+        logger.critical(f"Fatal error during bot startup or polling: {fatal}", exc_info=True)
+        raise
