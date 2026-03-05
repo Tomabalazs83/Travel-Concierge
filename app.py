@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 try:
     client = genai.Client(api_key=GEMINI_KEY)
     
-    # Using the explicit full path to avoid the 404 routing error
-    # We use 1.5-flash here as it is the stable production anchor for 2026
-    MODEL_ID = "models/gemini-1.5-flash" 
+    # 2026 PRO-TIP: Use the clean ID without 'models/' for the new Client.
+    # gemini-2.5-flash-lite is the designated successor to the 3.1-lite preview.
+    MODEL_ID = "gemini-2.5-flash-lite" 
     
-    SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty and concise."
-    logger.info("Gemini 1.5 Flash client initialized with explicit path.")
+    SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty, dry, and concise."
+    logger.info(f"Concierge initialized with {MODEL_ID}.")
 except Exception as e:
     logger.error(f"AI Setup failed: {e}")
     client = None
