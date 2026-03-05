@@ -2,7 +2,7 @@ import os, requests, datetime, logging
 from datetime import datetime as dt, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from google import genai  # The 2026 Modern SDK
+from google import genai
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -12,11 +12,11 @@ RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ─── MODERN AI SETUP (SDK v2.0) ──────────────────────────────────────────────────
+# ─── MODERN AI SETUP ─────────────────────────────────────────────────────────────
 try:
     client = genai.Client(api_key=GEMINI_KEY)
-    MODEL_ID = "gemini-2.5-flash-lite" 
-    SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty, dry, and concise. You remember the history of our conversation to provide context."
+    MODEL_ID = "gemini-2.0-flash" 
+    SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty, dry, and concise. You remember the history of our conversation."
     logger.info(f"Concierge initialized with {MODEL_ID}.")
 except Exception as e:
     logger.error(f"AI Setup failed: {e}")
@@ -67,12 +67,9 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not client: return
-    user_id = update.effective_user.id
     user_text = update.message.text.strip()
 
-    # Initialize or retrieve chat session for this user
     if 'chat_session' not in context.user_data:
-        # The new SDK uses client.chats.create to manage memory automatically
         context.user_data['chat_session'] = client.chats.create(
             model=MODEL_ID,
             config={'system_instruction': SYS_INSTR}
@@ -89,9 +86,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     chat_id = getattr(context.job, 'chat_id', None) or context.user_data.get('chat_id')
     if not chat_id: return
-    options = {"Hawaii": "City:honolulu_hi_us", "Bali": "City:denpasar_id", "London": "City:london_gb"}
     
+    options = {"Hawaii": "City:honolulu_hi_us", "Bali": "City:denpasar_id", "London": "City:london_gb"}
     await context.bot.send_message(chat_id=chat_id, text="Consulting the summer registries, Sir...")
+    
     report = "🛎 **Travel Briefing, Sir**\n\n"
     data_for_ai = ""
     for name, entity in options.items():
@@ -101,12 +99,37 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     
     await context.bot.send_message(chat_id=chat_id, text=report, parse_mode='Markdown')
 
-    # ANALYSIS WITH MEMORY
     try:
-        chat_session = context.user_data.get('chat_session') or client.chats.create(model=MODEL_ID, config={'system_instruction': SYS_INSTR})
-        analysis_res = chat_session.send_message(f"Provide a witty, two-sentence analysis of these prices for Sir: {data_for_ai}")
-        await context.bot.send_message(chat_id=chat_id, text=f"🎩 **Analysis:**\n{analysis_res.text}")
-    except:
-        pass
+        # Get or create session to maintain history
+        chat_session = context.user_data.get('chat_session')
+        if not chat_session:
+            chat_session = client.chats.create(model=MODEL_ID, config={'system_instruction': SYS_INSTR})
+            context.user_data['chat_session'] = chat_session
+            
+        analysis_res = chat_session.send_message(f"Provide a witty, two-sentence analysis of these prices: {data_for_ai}")
+        await context.bot.send_message(chat_id=chat_id, text=f"🎩 **Butler's insight:**\n{analysis_res.text}")
+    except Exception as e:
+        logger.error(f"Analysis error: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['chat_id'] = update.effective_chat.id
+    # Reset chat session on /start
+    context.user_data['chat_session'] = client.chats.create(model=MODEL_ID, config={'system_instruction': SYS_INSTR})
+    await update.message.reply_text("The Concierge is at your service, Sir. I have cleared my local ledger for our fresh start.")
+    
+    # Remove existing jobs and reschedule
+    jobs = context.job_queue.get_jobs_by_name('daily_check')
+    for job in jobs: job.schedule_removal()
+    context.job_queue.run_daily(daily_brief, time=datetime.time(hour=8, minute=0), chat_id=update.effective_chat.id, name='daily_check')
+
+async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['chat_id'] = update.effective_chat.id
+    await daily_brief(context)
+
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('check', check_now))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
+    logger.info("Butler bot starting...")
+    app.run_polling(drop_pending_updates=True)
