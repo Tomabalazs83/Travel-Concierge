@@ -1,5 +1,5 @@
-python-telegram-bot
-google-generativeai
+python-telegram-bot==21.10
+google-genai
 requests
 python-dotenv
 apscheduler
