@@ -48,7 +48,6 @@ except Exception as e:
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
     today = dt.now()
-    # 90-105 days out for summer planning
     out_start = (today + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00")
     out_end   = (today + timedelta(days=105)).strftime("%Y-%m-%dT00:00:00")
     in_start  = (today + timedelta(days=110)).strftime("%Y-%m-%dT00:00:00")
@@ -72,57 +71,42 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
         res.raise_for_status()
         data = res.json()
         
-        # Check if the response is wrapped in a 'data' key (common in 2026 versions)
         itineraries = data.get('itineraries') or data.get('data', {}).get('itineraries') or []
-        
         if not itineraries:
             return "No offers found for the selected period, Sir."
 
         itin = itineraries[0]
-        
-        # LOGGING: Check your Railway logs for this line if details are still missing
-        logger.info(f"Registry Keys for {dest_entity}: {list(itin.keys())}")
-        
-        # Attempt to find segments in 'route', 'sectors', or 'parts'
-        segments = itin.get('route') or itin.get('sectors') or itin.get('parts') or []
-        
         price = f"€{itin.get('price', {}).get('amount', '—')}"
-        duration = itin.get('fly_duration') or itin.get('duration') or "—"
-        
-        if not segments:
-            # Fallback to top-level airline codes if segments are hidden
-            airlines = itin.get('airlines', []) or itin.get('airlines_codes', [])
-            return (
-                f"💰 **{price}**\n"
-                f"⚠️ *The registry has restricted segment details for this route, Sir.*\n"
-                f"✈️ **Carriers:** {', '.join(airlines) if airlines else 'Multiple'}\n"
-                f"⏱ **Total Travel:** {duration}\n"
-                f"🔗 [View Itinerary]({itin.get('deep_link')})"
-            )
 
-        # Separate segments by 'return' flag
-        out_segs = [s for s in segments if s.get('return') == 0]
-        ret_segs = [s for s in segments if s.get('return') == 1]
-
-        def parse_leg(leg_segs):
-            if not leg_segs: return "Details obscured", "—", "—", 0
+        def parse_leg(leg_name):
+            leg_data = itin.get(leg_name, {})
+            # According to your logs, sectors live inside outbound/inbound
+            sectors = leg_data.get('sectors', [])
+            if not sectors:
+                return "Details obscured", "—", "—", 0
             
-            # Extract Airline + Flight Number (e.g., KL1234)
-            f_nums = [f"{s.get('airline', '??')}{s.get('flight_no', '')}" for s in leg_segs]
+            f_nums = []
+            for s in sectors:
+                carrier = s.get('airline', {}).get('code') or s.get('airline') or "??"
+                num = s.get('number') or s.get('flight_no') or ""
+                f_nums.append(f"{carrier}{num}")
             
-            # Resilient time parsing (ISO or Unix)
-            def get_time(s, key):
-                val = s.get(f'local_{key}') or s.get(key) or s.get(f'{key[0]}Time')
-                if isinstance(val, int): return dt.fromtimestamp(val).strftime("%d %b, %H:%M")
-                try: return dt.fromisoformat(val.replace('Z', '')).strftime("%d %b, %H:%M")
-                except: return str(val)[:16]
+            def fmt_time(t_str):
+                if not t_str: return "—"
+                try: return dt.fromisoformat(t_str.replace('Z', '')).strftime("%d %b, %H:%M")
+                except: return str(t_str)[:16]
 
-            dep = get_time(leg_segs[0], 'departure')
-            arr = get_time(leg_segs[-1], 'arrival')
-            return ", ".join(f_nums), dep, arr, len(leg_segs) - 1
+            dep = fmt_time(sectors[0].get('local_departure') or sectors[0].get('departure'))
+            arr = fmt_time(sectors[-1].get('local_arrival') or sectors[-1].get('arrival'))
+            stops = len(sectors) - 1
+            return ", ".join(f_nums), dep, arr, stops
 
-        out_f, out_d, out_a, out_s = parse_leg(out_segs)
-        ret_f, ret_d, ret_a, ret_s = parse_leg(ret_segs)
+        out_f, out_d, out_a, out_s = parse_leg('outbound')
+        ret_f, ret_d, ret_a, ret_s = parse_leg('inbound')
+
+        # Link extraction
+        book_link = itin.get('shareId') # Often used to rebuild links if deep_link is missing
+        link_part = f"\n🔗 [Secure Passage](https://www.kiwi.com/en/booking?token={itin.get('id')})" if itin.get('id') else ""
 
         return (
             f"💰 **{price}**\n"
@@ -130,13 +114,12 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
             f"   Flights: {out_f} ({out_s} stops)\n"
             f"🛬 **Return:** {ret_d} → {ret_a}\n"
             f"   Flights: {ret_f} ({ret_s} stops)\n"
-            f"⏱ **Total Travel:** {duration}\n"
-            f"🔗 [Secure Passage]({itin.get('deep_link')})"
+            f"{link_part}"
         )
 
     except Exception as e:
-        logger.error(f"Deep Registry Scan failed: {e}")
-        return "The details are currently obscured within the registry, Sir."
+        logger.error(f"Flight processing failed for {dest_entity}: {e}")
+        return "The registry's details are currently elusive, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
