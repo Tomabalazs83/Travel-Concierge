@@ -47,11 +47,7 @@ except Exception as e:
 
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
-    """
-    Extracts detailed itinerary info by parsing the 'route' array from the Kiwi API.
-    """
     today = dt.now()
-    # Setting search windows
     out_start = (today + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00")
     out_end   = (today + timedelta(days=105)).strftime("%Y-%m-%dT00:00:00")
     in_start  = (today + timedelta(days=110)).strftime("%Y-%m-%dT00:00:00")
@@ -62,16 +58,11 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
         "source": "City:amsterdam_nl",
         "destination": dest_entity,
         "currency": "EUR",
-        "locale": "en",
-        "adults": 1,
-        "cabinClass": "ECONOMY",
-        "sortBy": "PRICE",
-        "sortOrder": "ASCENDING",
+        "limit": 1,
         "outboundDepartmentDateStart": out_start,
         "outboundDepartmentDateEnd":   out_end,
         "inboundDepartureDateStart":   in_start,
-        "inboundDepartureDateEnd":     in_end,
-        "limit": 1
+        "inboundDepartureDateEnd":     in_end
     }
 
     headers = {
@@ -81,7 +72,6 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
-        res.raise_for_status()
         data = res.json()
         itineraries = data.get('itineraries', [])
         
@@ -89,55 +79,71 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
             return "No offers found for the selected period, Sir."
 
         itin = itineraries[0]
+        # The 'route' is where the individual flight segments live
         route = itin.get('route', [])
         
-        # 1. Price
         price = f"€{itin.get('price', {}).get('amount', '—')}"
         
-        # 2. Split Route into Outbound (return=0) and Return (return=1)
-        outbound_segments = [s for s in route if s.get('return') == 0]
-        return_segments = [s for s in route if s.get('return') == 1]
+        # Split segments by 'return' flag
+        out_segments = [s for s in route if s.get('return') == 0]
+        ret_segments = [s for s in route if s.get('return') == 1]
+
+        def format_time(seg):
+            # Try ISO local time first, then Unix timestamps
+            raw = seg.get('local_departure') or seg.get('departure')
+            if not raw:
+                unix = seg.get('dTime') or seg.get('dTimeUTC')
+                if unix:
+                    return dt.fromtimestamp(unix).strftime("%d %b, %H:%M")
+                return "—"
+            try:
+                return dt.fromisoformat(raw.replace('Z', '')).strftime("%d %b, %H:%M")
+            except:
+                return raw[:16]
 
         def parse_leg(segments):
-            if not segments: return "No data", "—", "—", 0
+            if not segments: return "No details", "—", "—", 0
             
-            # Extract Flight Numbers (e.g., KL1234)
-            flight_details = [f"{s.get('airline', '??')}{s.get('flight_no', '')}" for s in segments]
+            # Airlines and flight numbers
+            f_details = []
+            for s in segments:
+                # Use 'airline' or 'operating_carrier'
+                carrier = s.get('airline') or s.get('operating_carrier') or "??"
+                num = s.get('flight_no') or s.get('operating_flight_no') or ""
+                f_details.append(f"{carrier}{num}")
             
-            # Times
-            dep_time_raw = segments[0].get('local_departure', '—')
-            arr_time_raw = segments[-1].get('local_arrival', '—')
-            
-            def format_dt(raw):
-                try:
-                    return dt.fromisoformat(raw.replace('Z', '')).strftime("%d %b, %H:%M")
-                except:
-                    return raw[:16]
+            dep_t = format_time(segments[0])
+            # For arrival time, we look at the last segment in the leg
+            arr_raw = segments[-1].get('local_arrival') or segments[-1].get('arrival')
+            if not arr_raw:
+                unix = segments[-1].get('aTime') or segments[-1].get('aTimeUTC')
+                arr_t = dt.fromtimestamp(unix).strftime("%d %b, %H:%M") if unix else "—"
+            else:
+                try: arr_t = dt.fromisoformat(arr_raw.replace('Z', '')).strftime("%d %b, %H:%M")
+                except: arr_t = arr_raw[:16]
 
             stops = len(segments) - 1
-            return ", ".join(flight_details), format_dt(dep_time_raw), format_dt(arr_time_raw), stops
+            return ", ".join(f_details), dep_t, arr_t, stops
 
-        out_flights, out_dep, out_arr, out_stops = parse_leg(outbound_segments)
-        ret_flights, ret_dep, ret_arr, ret_stops = parse_leg(return_segments)
+        out_f, out_dep, out_arr, out_s = parse_leg(out_segments)
+        ret_f, ret_dep, ret_arr, ret_s = parse_leg(ret_segments)
 
-        # 3. Final String Construction
         book_link = itin.get('deep_link')
         link_part = f"\n🔗 [Secure Passage]({book_link})" if book_link else ""
 
-        result = (
+        return (
             f"💰 **{price}**\n"
             f"🛫 **Outbound:** {out_dep} → {out_arr}\n"
-            f"   Flights: {out_flights} ({out_stops} stops)\n"
+            f"   Flights: {out_f} ({out_s} stops)\n"
             f"🛬 **Return:** {ret_dep} → {ret_arr}\n"
-            f"   Flights: {ret_flights} ({ret_stops} stops)\n"
+            f"   Flights: {ret_f} ({ret_s} stops)\n"
             f"⏱ **Total Travel:** {itin.get('fly_duration', '—')}"
             f"{link_part}"
         )
-        return result
 
     except Exception as e:
-        logger.error(f"Flight processing failed: {e}")
-        return "The registry details are currently obscured, Sir."
+        logger.error(f"Detailed flight processing failed: {e}")
+        return "The registry's ink appears to have faded for these details, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
