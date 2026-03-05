@@ -1,8 +1,8 @@
-import os, requests, datetime, logging, json
+import os, requests, datetime, logging
 from datetime import datetime as dt, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
+from google import genai # The 2026 Modern SDK
 
 # --- 1. CONFIGURATION ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -12,14 +12,16 @@ RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- 2. GEMINI SETUP ---
+# --- 2. MODERN AI SETUP (SDK v2.0) ---
 try:
-    genai.configure(api_key=GEMINI_KEY, transport='rest')
-    SYSTEM_INSTRUCTION = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Assistant with travel planning. Be elegant and concise."
-    ai_brain = genai.GenerativeModel("gemini-1.5-flash", system_instruction=SYSTEM_INSTRUCTION)
+    client = genai.Client(api_key=GEMINI_KEY)
+    MODEL_ID = "gemini-2.0-flash"
+    # Instructions are passed per-request or per-session in the new SDK
+    SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty and concise."
+    logger.info("Gemini 2.0 client initialized successfully.")
 except Exception as e:
-    logger.error(f"Gemini setup failed: {e}")
-    ai_brain = None
+    logger.error(f"AI Setup failed: {e}")
+    client = None
 
 # --- 3. FLIGHT SEARCH TOOL ---
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
@@ -39,62 +41,56 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
-        res.raise_for_status()
         data = res.json()
         itineraries = data.get('itineraries') or data.get('data', {}).get('itineraries') or []
         
-        if not itineraries:
-            return "No offers found for the selected period, Sir."
-
+        if not itineraries: return "No offers found, Sir."
         itin = itineraries[0]
         price = f"€{itin.get('price', {}).get('amount', '—')}"
 
         def parse_leg(leg_name):
-            leg_data = itin.get(leg_name, {})
-            # We look for 'sectors' as seen in your previous log
-            sectors = leg_data.get('sectors', [])
-            if not sectors:
-                return "Details obscured", "—", "—", 0
+            leg = itin.get(leg_name, {})
+            sects = leg.get('sectors', [])
+            if not sects: return "N/A", "—", "—", 0
             
             f_nums = []
-            for s in sectors:
-                # 2026 Registry check: 'airline' might be a dict or a string
+            for s in sects:
                 air = s.get('airline', {})
                 code = air.get('code') if isinstance(air, dict) else air
-                num = s.get('number') or s.get('flight_no') or ""
-                f_nums.append(f"{code}{num}")
+                f_nums.append(f"{code}{s.get('number', '')}")
             
-            def fmt_time(t_str):
-                if not t_str: return "—"
-                try: return dt.fromisoformat(t_str.replace('Z', '')).strftime("%d %b, %H:%M")
-                except: return str(t_str)[:16]
+            def fmt(t):
+                try: return dt.fromisoformat(t.replace('Z', '')).strftime("%d %b, %H:%M")
+                except: return str(t)[:16]
 
-            dep = fmt_time(sectors[0].get('local_departure') or sectors[0].get('departure'))
-            arr = fmt_time(sectors[-1].get('local_arrival') or sectors[-1].get('arrival'))
-            return ", ".join(f_nums), dep, arr, len(sectors)-1
+            dep = fmt(sects[0].get('local_departure') or sects[0].get('departure'))
+            arr = fmt(sects[-1].get('local_arrival') or sects[-1].get('arrival'))
+            return ", ".join(f_nums), dep, arr, len(sects)-1
 
         out_f, out_d, out_a, out_s = parse_leg('outbound')
         ret_f, ret_d, ret_a, ret_s = parse_leg('inbound')
-
+        
         link = f"https://www.kiwi.com/en/booking?token={itin.get('id')}" if itin.get('id') else ""
-        link_str = f"\n🔗 [Secure Passage]({link})" if link else ""
-
-        return (f"💰 **{price}**\n🛫 **Outbound:** {out_d} → {out_a}\n   Flights: {out_f} ({out_s} stops)\n"
-                f"🛬 **Return:** {ret_d} → {ret_a}\n   Flights: {ret_f} ({ret_s} stops){link_str}")
+        return (f"💰 **{price}**\n🛫 **Outbound:** {out_d} → {out_a} ({out_f}, {out_s} stops)\n"
+                f"🛬 **Return:** {ret_d} → {ret_a} ({ret_f}, {ret_s} stops)\n🔗 [Book]({link})")
     except Exception as e:
-        logger.error(f"Failed for {dest_entity}: {e}")
+        logger.error(f"Search error: {e}")
         return "The details are currently elusive, Sir."
 
 # --- 4. HANDLERS ---
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not ai_brain: return
-    if 'chat_session' not in context.user_data:
-        context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+    if not client: return
     try:
-        response = context.user_data['chat_session'].send_message(update.message.text)
+        # The new SDK 2.0 pattern for simple chat
+        response = client.models.generate_content(
+            model=MODEL_ID,
+            config={'system_instruction': SYS_INSTR},
+            contents=update.message.text
+        )
         await update.message.reply_text(response.text)
     except Exception as e:
         logger.error(f"Chat error: {e}")
+        await update.message.reply_text("I'm dreadfully sorry, Sir, my thoughts are a bit muddled.")
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     chat_id = getattr(context.job, 'chat_id', None) or context.user_data.get('chat_id')
@@ -102,10 +98,9 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     options = {"Hawaii": "City:honolulu_hi_us", "Bali": "City:denpasar_id", "London": "City:london_gb"}
     
     await context.bot.send_message(chat_id=chat_id, text="Consulting the summer registries, Sir...")
-    report = "🛎 **Travel Concierge Summer Briefing, Sir**\n\n"
+    report = "🛎 **Travel Briefing, Sir**\n\n"
     for name, entity in options.items():
         report += f"✈️ **{name}**:\n{get_cheapest_roundtrip_info(entity)}\n\n"
-    
     await context.bot.send_message(chat_id=chat_id, text=report, parse_mode='Markdown')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -118,8 +113,10 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await daily_brief(context)
 
 if __name__ == '__main__':
+    # Initialize the app with a slight delay to help prevent 409 Conflicts on Railway
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('check', check_now))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-    app.run_polling()
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
+    logger.info("Butler bot starting...")
+    app.run_polling(drop_pending_updates=True)
