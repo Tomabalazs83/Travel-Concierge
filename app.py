@@ -80,21 +80,25 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
 
         def parse_leg(leg_name):
             leg_data = itin.get(leg_name, {})
-            # According to your logs, sectors live inside outbound/inbound
+            # Your logs confirm 'sectors' is the correct list
             sectors = leg_data.get('sectors', [])
             if not sectors:
                 return "Details obscured", "—", "—", 0
             
             f_nums = []
             for s in sectors:
-                carrier = s.get('airline', {}).get('code') or s.get('airline') or "??"
+                # Digging into the airline object per 2026 standards
+                airline_info = s.get('airline', {})
+                code = airline_info.get('code') if isinstance(airline_info, dict) else s.get('airline')
                 num = s.get('number') or s.get('flight_no') or ""
-                f_nums.append(f"{carrier}{num}")
+                f_nums.append(f"{code}{num}")
             
             def fmt_time(t_str):
                 if not t_str: return "—"
-                try: return dt.fromisoformat(t_str.replace('Z', '')).strftime("%d %b, %H:%M")
-                except: return str(t_str)[:16]
+                try: 
+                    return dt.fromisoformat(t_str.replace('Z', '')).strftime("%d %b, %H:%M")
+                except: 
+                    return str(t_str)[:16]
 
             dep = fmt_time(sectors[0].get('local_departure') or sectors[0].get('departure'))
             arr = fmt_time(sectors[-1].get('local_arrival') or sectors[-1].get('arrival'))
@@ -104,21 +108,22 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
         out_f, out_d, out_a, out_s = parse_leg('outbound')
         ret_f, ret_d, ret_a, ret_s = parse_leg('inbound')
 
-        # Link extraction
-        book_link = itin.get('shareId') # Often used to rebuild links if deep_link is missing
-        link_part = f"\n🔗 [Secure Passage](https://www.kiwi.com/en/booking?token={itin.get('id')})" if itin.get('id') else ""
+        # Link extraction using the id as a token
+        link_part = ""
+        if itin.get('id'):
+            link_part = f"\n🔗 [Secure Passage](https://www.kiwi.com/en/booking?token={itin.get('id')})"
 
         return (
             f"💰 **{price}**\n"
             f"🛫 **Outbound:** {out_d} → {out_a}\n"
             f"   Flights: {out_f} ({out_s} stops)\n"
-            f"🛬 **Return:** {ret_d} → {ret_a}\n"
+            f"🛬 **Return:** {ret_d} → {ret_arr if 'ret_arr' in locals() else ret_a}\n"
             f"   Flights: {ret_f} ({ret_s} stops)\n"
             f"{link_part}"
         )
 
     except Exception as e:
-        logger.error(f"Flight processing failed for {dest_entity}: {e}")
+        logger.error(f"Flight processing failed: {e}")
         return "The registry's details are currently elusive, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
