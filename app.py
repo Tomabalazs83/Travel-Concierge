@@ -26,19 +26,15 @@ logger = logging.getLogger(__name__)
 # ─── GEMINI SETUP ────────────────────────────────────────────────────────────────
 try:
     genai.configure(api_key=GEMINI_KEY, transport='rest')
-    # Use a model name known to be available in 2026
     ai_brain = genai.GenerativeModel("gemini-2.5-flash")
     logger.info("Gemini model initialized successfully")
 except Exception as e:
     logger.error(f"Gemini setup failed: {e}")
-    ai_brain = None  # we'll check this later
+    ai_brain = None
 
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_flight_price(dest_entity: str) -> str:
-    """Query Kiwi.com RapidAPI for cheapest round-trip from Amsterdam"""
     today = dt.now()
-    
-    # Looking ~3–5 months ahead (adjust windows as desired)
     out_start = (today + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00")
     out_end   = (today + timedelta(days=105)).strftime("%Y-%m-%dT00:00:00")
     in_start  = (today + timedelta(days=110)).strftime("%Y-%m-%dT00:00:00")
@@ -55,7 +51,6 @@ def get_flight_price(dest_entity: str) -> str:
         "cabinClass": "ECONOMY",
         "sortBy": "PRICE",
         "sortOrder": "ASCENDING",
-        # You can remove or change this if the API doesn't like weekday filters
         "outbound": "SUNDAY,MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY,SATURDAY",
         "outboundDepartmentDateStart": out_start,
         "outboundDepartmentDateEnd":   out_end,
@@ -88,10 +83,10 @@ def get_flight_price(dest_entity: str) -> str:
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """General conversation with the butler"""
+    """General conversation with memory + 3-month auto-clear"""
     if ai_brain is None:
         await update.message.reply_text(
-            "I'm terribly sorry, Sir — my mind seems to be offline at the moment."
+            "Terribly sorry, Sir — the grey matter appears to be taking an unscheduled sabbatical."
         )
         return
 
@@ -99,20 +94,50 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
+    user_id = update.effective_user.id
+    now = dt.utcnow()  # UTC is safer for timestamp consistency across servers
+    THREE_MONTHS = timedelta(days=90)
+
+    # Initialize or get user data
+    if 'chat_session' not in context.user_data:
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+        context.user_data['last_active'] = now
+        logger.info(f"New chat session created for user {user_id}")
+
+    chat_session = context.user_data['chat_session']
+
+    # Check for inactivity > 3 months → reset session
+    if 'last_active' in context.user_data:
+        last_active = context.user_data['last_active']
+        if isinstance(last_active, dt) and (now - last_active) > THREE_MONTHS:
+            logger.info(f"Auto-clearing stale session for user {user_id} (inactive since {last_active})")
+            del context.user_data['chat_session']
+            if 'last_active' in context.user_data:
+                del context.user_data['last_active']
+
+            # Re-create fresh session
+            context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+            chat_session = context.user_data['chat_session']
+
+            await update.message.reply_text(
+                "It appears our previous correspondence has aged gracefully into the archives, Sir.\n"
+                "We begin anew — how may I be of service today?"
+            )
+
+    # Update last active timestamp (every message refreshes it)
+    context.user_data['last_active'] = now
+
     try:
-        prompt = f"You are a sophisticated British butler. Address the user as Sir. Keep replies elegant, concise and slightly dryly humorous when appropriate. Respond to: {user_text}"
-        response = ai_brain.generate_content(prompt)
+        response = chat_session.send_message(user_text)
         text = response.text.strip()
         await update.message.reply_text(text)
     except Exception as e:
-        logger.error(f"Gemini chat error: {e}")
+        logger.error(f"Gemini chat error for user {user_id}: {e}")
         await update.message.reply_text(
-            "My apologies, Sir. A momentary lapse in decorum occurred in the thinking apparatus."
+            "A most regrettable disturbance in the ether, Sir. Shall we try again?"
         )
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
-    """Morning flight price briefing"""
-    # More robust chat_id retrieval
     chat_id = (
         getattr(context.job, 'chat_id', None)
         or context.user_data.get('chat_id')
@@ -179,7 +204,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Use /check for an immediate briefing, or simply speak to me."
     )
 
-    # Remove old jobs to prevent duplicates
     current_jobs = context.job_queue.get_jobs_by_name('daily_flight_check')
     for job in current_jobs:
         job.schedule_removal()
