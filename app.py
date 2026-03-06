@@ -2,6 +2,7 @@ import os
 import requests
 import datetime
 import logging
+import asyncio  
 from datetime import datetime as dt, timedelta
 
 from telegram import Update
@@ -31,7 +32,7 @@ try:
     else:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
-            model_name="gemini-1.5-flash-latest",
+            "gemini-1.5-flash-latest",
             system_instruction=(
                 "You are Jeeves, a sophisticated British butler. "
                 "Always address the user as 'Sir'. "
