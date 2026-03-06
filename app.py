@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 # New 2026 package (correct import)
-from google import genai
+import google.generativeai as genai
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -30,12 +30,8 @@ try:
     if not GEMINI_KEY:
         logger.warning("GEMINI_KEY not set → AI disabled")
     else:
-        # New SDK: use genai.GenerativeModel directly with api_key
-        ai_brain = genai.GenerativeModel(
-            model_name="gemini-1.5-flash-latest",
-            generation_config=genai.types.GenerationConfig(temperature=0.7),
-            api_key=GEMINI_KEY  # pass key here
-        )
+        genai.configure(api_key=GEMINI_KEY)
+        ai_brain = genai.GenerativeModel("gemini-1.5-flash-latest")
         logger.info("Concierge initialized with gemini-1.5-flash-latest")
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
