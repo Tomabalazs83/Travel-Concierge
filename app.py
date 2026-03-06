@@ -18,7 +18,7 @@ try:
     client = genai.Client(api_key=GEMINI_KEY)
     
     # In the stable 2026 SDK, we use the model name directly
-    MODEL_ID = "gemini-1.5-flash" 
+    ai_brain = genai.GenerativeModel("gemini-1.5-flash-latest")
     
     SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty, dry, and concise."
     logger.info(f"Concierge initialized with {MODEL_ID}.")
