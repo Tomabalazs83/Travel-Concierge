@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 # New 2026 package
-import google.genai as genai
+from google import genai
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -28,12 +28,13 @@ logger = logging.getLogger(__name__)
 ai_brain = None
 try:
     if not GEMINI_KEY:
-        logger.warning("GEMINI_KEY not set → AI features disabled")
+        logger.warning("GEMINI_KEY not set → AI disabled")
     else:
-        # New SDK: configure is optional if key in env, but explicit is safer
-        genai.configure(api_key=GEMINI_KEY)
-        # Current safe model name in 2026 (Flash series alias)
-        ai_brain = genai.GenerativeModel("gemini-1.5-flash-latest")
+        # New SDK: no configure(), pass api_key to model or use env
+        ai_brain = genai.GenerativeModel(
+            model_name="gemini-1.5-flash-latest",
+            api_key=GEMINI_KEY
+        )
         logger.info("Concierge initialized with gemini-1.5-flash-latest")
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
@@ -214,7 +215,7 @@ if __name__ == '__main__':
         .build()
     )
 
-    # Synchronous delete_webhook (safe, no await needed in sync context)
+    # Synchronous call to delete webhook (no await needed in sync context)
     app.bot.delete_webhook(drop_pending_updates=True)
     logger.info("Webhook cleaned, pending updates dropped")
 
