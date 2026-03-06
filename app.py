@@ -13,7 +13,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# New 2026 package
+# New 2026 package (correct import)
 from google import genai
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
@@ -30,10 +30,11 @@ try:
     if not GEMINI_KEY:
         logger.warning("GEMINI_KEY not set → AI disabled")
     else:
-        # New SDK: no configure(), pass api_key to model or use env
+        # New SDK: use genai.GenerativeModel directly with api_key
         ai_brain = genai.GenerativeModel(
             model_name="gemini-1.5-flash-latest",
-            api_key=GEMINI_KEY
+            generation_config=genai.types.GenerationConfig(temperature=0.7),
+            api_key=GEMINI_KEY  # pass key here
         )
         logger.info("Concierge initialized with gemini-1.5-flash-latest")
 except Exception as e:
@@ -215,8 +216,9 @@ if __name__ == '__main__':
         .build()
     )
 
-    # Synchronous call to delete webhook (no await needed in sync context)
-    app.bot.delete_webhook(drop_pending_updates=True)
+    # Run async delete_webhook in a short loop to avoid warning
+    import asyncio
+    asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
     logger.info("Webhook cleaned, pending updates dropped")
 
     app.add_handler(CommandHandler('start', start))
