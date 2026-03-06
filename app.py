@@ -2,7 +2,7 @@ import os
 import requests
 import datetime
 import logging
-import asyncio  
+import asyncio
 from datetime import datetime as dt, timedelta
 
 from telegram import Update
@@ -28,18 +28,18 @@ logger = logging.getLogger(__name__)
 ai_brain = None
 try:
     if not GEMINI_KEY:
-        logger.warning("GEMINI_KEY not set → AI features disabled")
+        logger.warning("GEMINI_KEY not set → AI disabled")
     else:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
-            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash",  # stable name
             system_instruction=(
                 "You are Jeeves, a sophisticated British butler. "
                 "Always address the user as 'Sir'. "
                 "Be witty, dry, concise, and elegant in your replies."
             )
         )
-        logger.info("Concierge initialized with gemini-1.5-flash-latest")
+        logger.info("Concierge initialized with gemini-1.5-flash")
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
 
@@ -213,7 +213,7 @@ if __name__ == '__main__':
         .build()
     )
 
-    # Run async delete_webhook in a short event loop
+    # Run async delete_webhook
     loop = asyncio.get_event_loop()
     loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
     logger.info("Webhook cleaned, pending updates dropped")
