@@ -32,14 +32,14 @@ try:
     else:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
-            "gemini-3.1-flash-lite",  # ← changed to working model
+            "gemini-2.5-flash-lite",  # ← changed to working model
             system_instruction=(
                 "You are Jeeves, a sophisticated British butler. "
                 "Always address the user as 'Sir'. "
                 "Be witty, dry, concise, and elegant in your replies."
             )
         )
-        logger.info("Concierge initialized with gemini-2.0-flash")
+        logger.info("Concierge initialized with gemini-2.5-flash-lite")
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
 
