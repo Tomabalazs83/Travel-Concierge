@@ -18,7 +18,7 @@ try:
     client = genai.Client(api_key=GEMINI_KEY)
     
     # In the stable 2026 SDK, we use the model name directly
-    ai_brain = genai.GenerativeModel("gemini-1.5-flash-latest")
+    ai_brain = genai.GenerativeModel("gemini-2.5-flash")
     
     SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty, dry, and concise."
     logger.info(f"Concierge initialized with {MODEL_ID}.")
@@ -136,4 +136,6 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('check', check_now))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
     logger.info("Butler bot starting...")
+    # Force-clean any old webhook or pending state
+await app.bot.delete_webhook(drop_pending_updates=True)
     app.run_polling(drop_pending_updates=True)
