@@ -13,7 +13,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-import google.generativeai as genai
+from google import genai
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
