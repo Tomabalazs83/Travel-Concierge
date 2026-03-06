@@ -28,16 +28,16 @@ logger = logging.getLogger(__name__)
 ai_brain = None
 try:
     if not GEMINI_KEY:
-        logger.warning("GEMINI_KEY not set → AI features disabled")
+        logger.warning("GEMINI_KEY not set → AI disabled")
     else:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
-            "gemini-2.5-flash-lite",  # your current working model
+            "gemini-2.5-flash-lite",
             system_instruction=(
                 "You are Jeeves, a sophisticated British butler. "
                 "Always address the user as 'Sir'. "
                 "Be witty, dry, concise, and elegant in your replies. "
-                "Remember previous context in the conversation, including any flight briefings or prices mentioned earlier."
+                "When referring to flight data from previous messages or briefings, recall and use the exact details accurately."
             )
         )
         logger.info("Concierge initialized with gemini-2.5-flash-lite")
@@ -46,53 +46,73 @@ except Exception as e:
 
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
+    """
+    Uses Google Flights RapidAPI to return price + detailed itinerary (times, airline, flight no, stops).
+    Much more detailed than the old Kiwi endpoint.
+    """
     today = dt.now()
-    out_start = (today + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00")
-    out_end = (today + timedelta(days=105)).strftime("%Y-%m-%dT00:00:00")
-    in_start = (today + timedelta(days=110)).strftime("%Y-%m-%dT00:00:00")
-    in_end = (today + timedelta(days=150)).strftime("%Y-%m-%dT00:00:00")
-    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
+    out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
+    ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
+
+    # Convert entity to airport code (you may need to map more destinations)
+    airport_map = {
+        "City:honolulu_hi_us": "HNL",
+        "City:denpasar_id": "DPS",
+        "City:london_gb": "LHR",
+        # Add more if needed, e.g. "City:oranjestad_aw": "AUA"
+    }
+    dest_code = airport_map.get(dest_entity, "XXX")  # fallback
+
+    url = "https://google-flights2.p.rapidapi.com/search"
     params = {
-        "source": "City:amsterdam_nl",
-        "destination": dest_entity,
+        "origin": "AMS",           # Amsterdam Schiphol
+        "destination": dest_code,
+        "date": out_date,
+        "returnDate": ret_date,
+        "adults": "1",
         "currency": "EUR",
-        "limit": 1,
-        "outboundDepartmentDateStart": out_start,
-        "outboundDepartmentDateEnd": out_end,
-        "inboundDepartureDateStart": in_start,
-        "inboundDepartureDateEnd": in_end,
+        "sort": "price",           # cheapest first
     }
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "kiwi-com-cheap-flights.p.rapidapi.com"
+        "x-rapidapi-host": "google-flights2.p.rapidapi.com"
     }
+
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
         res.raise_for_status()
         data = res.json()
-        itineraries = data.get('itineraries') or data.get('data', {}).get('itineraries') or []
-        if not itineraries:
+        flights = data.get("flights", [])
+        if not flights:
             return "No offers found, Sir."
-        itin = itineraries[0]
-        price = f"€{itin.get('price', {}).get('amount', '—')}"
-        def parse_leg(leg_name):
-            leg = itin.get(leg_name, {})
-            sects = leg.get('sectors', [])
-            if not sects:
-                return "N/A", "—", "—", 0
-            f_nums = [f"{s.get('airline', {}).get('code', '??')}{s.get('number', '')}" for s in sects]
-            dep = (sects[0].get('local_departure') or "—")[:16].replace('T', ' ')
-            arr = (sects[-1].get('local_arrival') or "—")[:16].replace('T', ' ')
-            return ", ".join(f_nums), dep, arr, len(sects)-1
-        out_f, out_d, out_a, out_s = parse_leg('outbound')
-        ret_f, ret_d, ret_a, ret_s = parse_leg('inbound')
+
+        # Get cheapest flight
+        cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
+        price = f"€{cheapest.get('price', '—')}"
+
+        # Outbound leg
+        outbound = cheapest.get("departure", {})
+        out_dep = outbound.get("departureTime", "—")
+        out_arr = outbound.get("arrivalTime", "—")
+        out_airline = outbound.get("airline", "—")
+        out_flight_no = outbound.get("flightNumber", "—")
+        out_stops = outbound.get("stops", 0)
+
+        # Return leg
+        inbound = cheapest.get("return", {})
+        ret_dep = inbound.get("departureTime", "—")
+        ret_arr = inbound.get("arrivalTime", "—")
+        ret_airline = inbound.get("airline", "—")
+        ret_flight_no = inbound.get("flightNumber", "—")
+        ret_stops = inbound.get("stops", 0)
+
         return (
             f"💰 **{price}**\n"
-            f"🛫 **Outbound:** {out_d} → {out_a} ({out_f}, {out_s} stops)\n"
-            f"🛬 **Return:** {ret_d} → {ret_a} ({ret_f}, {ret_s} stops)"
+            f"🛫 **Outbound:** {out_dep} → {out_arr} ({out_airline} {out_flight_no}, {out_stops} stops)\n"
+            f"🛬 **Return:** {ret_dep} → {ret_arr} ({ret_airline} {ret_flight_no}, {ret_stops} stops)"
         )
     except Exception as e:
-        logger.error(f"Search error for {dest_entity}: {e}")
+        logger.error(f"Flight search error for {dest_entity}: {e}")
         return "The details are currently elusive, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
@@ -105,7 +125,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
-    # Create persistent session only once per user
+    # Persistent session: create only once per user
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
         logger.info("New persistent chat session created")
@@ -148,14 +168,13 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Reuse the persistent session (created in /start or first chat)
+        # Reuse persistent session
         if 'chat_session' not in context.user_data:
             context.user_data['chat_session'] = ai_brain.start_chat(history=[])
-            logger.info(f"Fallback session created in daily_brief for {chat_id}")
         chat_session = context.user_data['chat_session']
 
         analysis_res = chat_session.send_message(
-            f"Provide a witty, dry, two-sentence analysis of these flight prices for Sir: {data_for_ai}"
+            f"Provide a witty, dry, two-sentence analysis of these flight prices and details for Sir: {data_for_ai}"
         )
         await context.bot.send_message(
             chat_id=chat_id,
@@ -173,7 +192,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     context.user_data['chat_id'] = chat_id
 
-    # Create persistent session only if not already exists
     if ai_brain and 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
         logger.info(f"Persistent chat session created for user {chat_id}")
@@ -196,12 +214,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['chat_id'] = update.effective_chat.id
     await daily_brief(context)
-
-# Optional: Add memory reset command
-async def clear_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if 'chat_session' in context.user_data:
-        del context.user_data['chat_session']
-    await update.message.reply_text("Memory refreshed, Sir. A clean slate, as it were.")
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
@@ -227,7 +239,6 @@ if __name__ == '__main__':
 
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('check', check_now))
-    app.add_handler(CommandHandler('clear', clear_memory))  # ← added
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
     logger.info("Bot handlers registered. Starting polling...")
