@@ -28,15 +28,16 @@ logger = logging.getLogger(__name__)
 ai_brain = None
 try:
     if not GEMINI_KEY:
-        logger.warning("GEMINI_KEY not set → AI disabled")
+        logger.warning("GEMINI_KEY not set → AI features disabled")
     else:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
-            "gemini-2.5-flash-lite",  # ← changed to working model
+            "gemini-2.5-flash-lite",  # your current working model
             system_instruction=(
                 "You are Jeeves, a sophisticated British butler. "
                 "Always address the user as 'Sir'. "
-                "Be witty, dry, concise, and elegant in your replies."
+                "Be witty, dry, concise, and elegant in your replies. "
+                "Remember previous context in the conversation, including any flight briefings or prices mentioned earlier."
             )
         )
         logger.info("Concierge initialized with gemini-2.5-flash-lite")
@@ -47,10 +48,9 @@ except Exception as e:
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
     today = dt.now()
     out_start = (today + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00")
-    out_end   = (today + timedelta(days=105)).strftime("%Y-%m-%dT00:00:00")
-    in_start  = (today + timedelta(days=110)).strftime("%Y-%m-%dT00:00:00")
-    in_end    = (today + timedelta(days=150)).strftime("%Y-%m-%dT00:00:00")
-
+    out_end = (today + timedelta(days=105)).strftime("%Y-%m-%dT00:00:00")
+    in_start = (today + timedelta(days=110)).strftime("%Y-%m-%dT00:00:00")
+    in_end = (today + timedelta(days=150)).strftime("%Y-%m-%dT00:00:00")
     url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
     params = {
         "source": "City:amsterdam_nl",
@@ -66,7 +66,6 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
         "x-rapidapi-key": RAPIDAPI_KEY,
         "x-rapidapi-host": "kiwi-com-cheap-flights.p.rapidapi.com"
     }
-
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
         res.raise_for_status()
@@ -74,10 +73,8 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
         itineraries = data.get('itineraries') or data.get('data', {}).get('itineraries') or []
         if not itineraries:
             return "No offers found, Sir."
-
         itin = itineraries[0]
         price = f"€{itin.get('price', {}).get('amount', '—')}"
-
         def parse_leg(leg_name):
             leg = itin.get(leg_name, {})
             sects = leg.get('sectors', [])
@@ -87,10 +84,8 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
             dep = (sects[0].get('local_departure') or "—")[:16].replace('T', ' ')
             arr = (sects[-1].get('local_arrival') or "—")[:16].replace('T', ' ')
             return ", ".join(f_nums), dep, arr, len(sects)-1
-
         out_f, out_d, out_a, out_s = parse_leg('outbound')
         ret_f, ret_d, ret_a, ret_s = parse_leg('inbound')
-
         return (
             f"💰 **{price}**\n"
             f"🛫 **Outbound:** {out_d} → {out_a} ({out_f}, {out_s} stops)\n"
@@ -110,9 +105,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
+    # Create persistent session only once per user
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
-        logger.info("New chat session created")
+        logger.info("New persistent chat session created")
 
     chat_session = context.user_data['chat_session']
 
@@ -152,8 +148,10 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
+        # Reuse the persistent session (created in /start or first chat)
         if 'chat_session' not in context.user_data:
             context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+            logger.info(f"Fallback session created in daily_brief for {chat_id}")
         chat_session = context.user_data['chat_session']
 
         analysis_res = chat_session.send_message(
@@ -175,8 +173,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     context.user_data['chat_id'] = chat_id
 
-    if ai_brain:
+    # Create persistent session only if not already exists
+    if ai_brain and 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+        logger.info(f"Persistent chat session created for user {chat_id}")
+
     await update.message.reply_text(
         "The Concierge is at your service, Sir. I have cleared my local ledger for our fresh start."
     )
@@ -195,6 +196,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['chat_id'] = update.effective_chat.id
     await daily_brief(context)
+
+# Optional: Add memory reset command
+async def clear_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if 'chat_session' in context.user_data:
+        del context.user_data['chat_session']
+    await update.message.reply_text("Memory refreshed, Sir. A clean slate, as it were.")
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
@@ -220,6 +227,7 @@ if __name__ == '__main__':
 
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('check', check_now))
+    app.add_handler(CommandHandler('clear', clear_memory))  # ← added
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
     logger.info("Bot handlers registered. Starting polling...")
