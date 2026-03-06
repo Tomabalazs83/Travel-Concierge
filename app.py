@@ -14,9 +14,13 @@ logger = logging.getLogger(__name__)
 
 # ─── MODERN AI SETUP ─────────────────────────────────────────────────────────────
 try:
+    # Ensure you are using the genai.Client from the 'google-genai' package
     client = genai.Client(api_key=GEMINI_KEY)
-    MODEL_ID = "gemini-1.5-flash"
-    SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty, dry, and concise. You remember the history of our conversation."
+    
+    # In the stable 2026 SDK, we use the model name directly
+    MODEL_ID = "gemini-1.5-flash" 
+    
+    SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty, dry, and concise."
     logger.info(f"Concierge initialized with {MODEL_ID}.")
 except Exception as e:
     logger.error(f"AI Setup failed: {e}")
