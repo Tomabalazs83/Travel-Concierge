@@ -210,37 +210,41 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await daily_brief(context)
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────────
+import asyncio
+
 if __name__ == '__main__':
-    if not TELEGRAM_TOKEN:
-        logger.critical("TELEGRAM_TOKEN missing → cannot start")
-        exit(1)
+    logger.info("Starting butler bot...")
 
-    try:
-        app = (
-            ApplicationBuilder()
-            .token(TELEGRAM_TOKEN)
-            .get_updates_read_timeout(30)
-            .get_updates_write_timeout(30)
-            .get_updates_pool_timeout(30)
-            .build()
-        )
+    async def main():
+        try:
+            app = (
+                ApplicationBuilder()
+                .token(TELEGRAM_TOKEN)
+                .get_updates_read_timeout(30)
+                .get_updates_write_timeout(30)
+                .get_updates_pool_timeout(30)
+                .build()
+            )
 
-        # Clean old webhook state
-        app.bot.delete_webhook(drop_pending_updates=True)
+            # Properly await the async delete_webhook
+            await app.bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook cleaned, pending updates dropped")
 
-        app.add_handler(CommandHandler('start', start))
-        app.add_handler(CommandHandler('check', check_now))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+            app.add_handler(CommandHandler('start', start))
+            app.add_handler(CommandHandler('check', check_now))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
-        logger.info("Butler bot starting...")
-        app.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,
-            poll_interval=1.0,
-            timeout=30,
-            bootstrap_retries=3
-        )
+            logger.info("Bot handlers registered. Starting polling...")
+            await app.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True,
+                poll_interval=1.0,
+                timeout=30,
+                bootstrap_retries=3
+            )
 
-    except Exception as e:
-        logger.critical(f"Bot startup failed: {e}", exc_info=True)
-        raise
+        except Exception as e:
+            logger.critical(f"Bot startup failed: {e}", exc_info=True)
+            raise
+
+    asyncio.run(main())
