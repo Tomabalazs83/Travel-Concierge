@@ -28,10 +28,11 @@ logger = logging.getLogger(__name__)
 ai_brain = None
 try:
     if not GEMINI_KEY:
-        logger.warning("GEMINI_KEY not set → AI disabled")
+        logger.warning("GEMINI_KEY not set → AI features disabled")
     else:
-        # New SDK: no global configure(), just pass api_key to model if needed
-        # But most calls work without it if key is in env or default
+        # New SDK: configure is optional if key in env, but explicit is safer
+        genai.configure(api_key=GEMINI_KEY)
+        # Current safe model name in 2026 (Flash series alias)
         ai_brain = genai.GenerativeModel("gemini-1.5-flash-latest")
         logger.info("Concierge initialized with gemini-1.5-flash-latest")
 except Exception as e:
@@ -111,10 +112,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if 'chat_session' not in context.user_data:
-        context.user_data['chat_session'] = ai_brain.start_chat(
-            history=[],
-            system_instruction=SYS_INSTR
-        )
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[], system_instruction=SYS_INSTR)
         logger.info("New chat session created")
 
     chat_session = context.user_data['chat_session']
@@ -156,10 +154,7 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if 'chat_session' not in context.user_data:
-            context.user_data['chat_session'] = ai_brain.start_chat(
-                history=[],
-                system_instruction=SYS_INSTR
-            )
+            context.user_data['chat_session'] = ai_brain.start_chat(history=[], system_instruction=SYS_INSTR)
         chat_session = context.user_data['chat_session']
 
         analysis_res = chat_session.send_message(
@@ -182,13 +177,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['chat_id'] = chat_id
 
     if ai_brain:
-        context.user_data['chat_session'] = ai_brain.start_chat(
-            history=[],
-            system_instruction=SYS_INSTR
-        )
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[], system_instruction=SYS_INSTR)
     await update.message.reply_text(
-        "The Concierge is at your service, Sir. "
-        "I have cleared my local ledger for our fresh start."
+        "The Concierge is at your service, Sir. I have cleared my local ledger for our fresh start."
     )
 
     jobs = context.job_queue.get_jobs_by_name('daily_check')
@@ -223,7 +214,7 @@ if __name__ == '__main__':
         .build()
     )
 
-    # Synchronous call (safe on most hosts)
+    # Synchronous delete_webhook (safe, no await needed in sync context)
     app.bot.delete_webhook(drop_pending_updates=True)
     logger.info("Webhook cleaned, pending updates dropped")
 
