@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # ─── MODERN AI SETUP ─────────────────────────────────────────────────────────────
 try:
     client = genai.Client(api_key=GEMINI_KEY)
-    MODEL_ID = "gemini-2.0-flash" 
+    MODEL_ID = "gemini-1.5-flash"
     SYS_INSTR = "You are Jeeves, a sophisticated British butler. Address the user as 'Sir'. Be witty, dry, and concise. You remember the history of our conversation."
     logger.info(f"Concierge initialized with {MODEL_ID}.")
 except Exception as e:
