@@ -2,6 +2,7 @@ import os
 import requests
 import datetime
 import logging
+import asyncio
 from datetime import datetime as dt, timedelta
 
 from telegram import Update
@@ -13,7 +14,6 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# New 2026 package (correct import)
 import google.generativeai as genai
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
@@ -28,19 +28,20 @@ logger = logging.getLogger(__name__)
 ai_brain = None
 try:
     if not GEMINI_KEY:
-        logger.warning("GEMINI_KEY not set → AI disabled")
+        logger.warning("GEMINI_KEY not set → AI features disabled")
     else:
         genai.configure(api_key=GEMINI_KEY)
-        ai_brain = genai.GenerativeModel("gemini-1.5-flash-latest")
+        ai_brain = genai.GenerativeModel(
+            "gemini-1.5-flash-latest",
+            system_instruction=(
+                "You are Jeeves, a sophisticated British butler. "
+                "Always address the user as 'Sir'. "
+                "Be witty, dry, concise, and elegant in your replies."
+            )
+        )
         logger.info("Concierge initialized with gemini-1.5-flash-latest")
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
-
-SYS_INSTR = (
-    "You are Jeeves, a sophisticated British butler. "
-    "Always address the user as 'Sir'. "
-    "Be witty, dry, concise, and elegant in your replies."
-)
 
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
@@ -110,7 +111,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if 'chat_session' not in context.user_data:
-        context.user_data['chat_session'] = ai_brain.start_chat(history=[], system_instruction=SYS_INSTR)
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[])
         logger.info("New chat session created")
 
     chat_session = context.user_data['chat_session']
@@ -152,7 +153,7 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if 'chat_session' not in context.user_data:
-            context.user_data['chat_session'] = ai_brain.start_chat(history=[], system_instruction=SYS_INSTR)
+            context.user_data['chat_session'] = ai_brain.start_chat(history=[])
         chat_session = context.user_data['chat_session']
 
         analysis_res = chat_session.send_message(
@@ -175,7 +176,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['chat_id'] = chat_id
 
     if ai_brain:
-        context.user_data['chat_session'] = ai_brain.start_chat(history=[], system_instruction=SYS_INSTR)
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[])
     await update.message.reply_text(
         "The Concierge is at your service, Sir. I have cleared my local ledger for our fresh start."
     )
@@ -212,9 +213,9 @@ if __name__ == '__main__':
         .build()
     )
 
-    # Run async delete_webhook in a short loop to avoid warning
-    import asyncio
-    asyncio.run(app.bot.delete_webhook(drop_pending_updates=True))
+    # Run async delete_webhook in a short event loop
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
     logger.info("Webhook cleaned, pending updates dropped")
 
     app.add_handler(CommandHandler('start', start))
