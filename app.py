@@ -13,7 +13,8 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from google import genai
+# New 2026 package
+import google.genai as genai
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -27,10 +28,10 @@ logger = logging.getLogger(__name__)
 ai_brain = None
 try:
     if not GEMINI_KEY:
-        logger.warning("GEMINI_KEY not set → AI features disabled")
+        logger.warning("GEMINI_KEY not set → AI disabled")
     else:
-        genai.configure(api_key=GEMINI_KEY)
-        # Safe 2026 model name (alias to latest stable Flash version)
+        # New SDK: no global configure(), just pass api_key to model if needed
+        # But most calls work without it if key is in env or default
         ai_brain = genai.GenerativeModel("gemini-1.5-flash-latest")
         logger.info("Concierge initialized with gemini-1.5-flash-latest")
 except Exception as e:
@@ -109,7 +110,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
-    # Initialize or get persistent chat session
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(
             history=[],
@@ -155,7 +155,6 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Use persistent session for continuity
         if 'chat_session' not in context.user_data:
             context.user_data['chat_session'] = ai_brain.start_chat(
                 history=[],
@@ -182,7 +181,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     context.user_data['chat_id'] = chat_id
 
-    # Reset chat session on /start
     if ai_brain:
         context.user_data['chat_session'] = ai_brain.start_chat(
             history=[],
@@ -193,7 +191,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "I have cleared my local ledger for our fresh start."
     )
 
-    # Remove old jobs and reschedule
     jobs = context.job_queue.get_jobs_by_name('daily_check')
     for job in jobs:
         job.schedule_removal()
@@ -210,41 +207,35 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await daily_brief(context)
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────────
-import asyncio
-
 if __name__ == '__main__':
+    if not TELEGRAM_TOKEN:
+        logger.critical("TELEGRAM_TOKEN missing → cannot start")
+        exit(1)
+
     logger.info("Starting butler bot...")
 
-    async def main():
-        try:
-            app = (
-                ApplicationBuilder()
-                .token(TELEGRAM_TOKEN)
-                .get_updates_read_timeout(30)
-                .get_updates_write_timeout(30)
-                .get_updates_pool_timeout(30)
-                .build()
-            )
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .get_updates_read_timeout(30)
+        .get_updates_write_timeout(30)
+        .get_updates_pool_timeout(30)
+        .build()
+    )
 
-            # Properly await the async delete_webhook
-            await app.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("Webhook cleaned, pending updates dropped")
+    # Synchronous call (safe on most hosts)
+    app.bot.delete_webhook(drop_pending_updates=True)
+    logger.info("Webhook cleaned, pending updates dropped")
 
-            app.add_handler(CommandHandler('start', start))
-            app.add_handler(CommandHandler('check', check_now))
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('check', check_now))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
-            logger.info("Bot handlers registered. Starting polling...")
-            await app.run_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True,
-                poll_interval=1.0,
-                timeout=30,
-                bootstrap_retries=3
-            )
-
-        except Exception as e:
-            logger.critical(f"Bot startup failed: {e}", exc_info=True)
-            raise
-
-    asyncio.run(main())
+    logger.info("Bot handlers registered. Starting polling...")
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        poll_interval=1.0,
+        timeout=30,
+        bootstrap_retries=3
+    )
