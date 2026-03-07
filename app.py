@@ -46,63 +46,76 @@ except Exception as e:
 
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
+    """
+    Uses Google Flights RapidAPI endpoint for detailed round-trip info.
+    Returns price + times, airline, flight no, stops.
+    """
     today = dt.now()
-    out_start = (today + timedelta(days=90)).strftime("%Y-%m-%d")
-    out_end   = (today + timedelta(days=105)).strftime("%Y-%m-%d")
-    in_start  = (today + timedelta(days=110)).strftime("%Y-%m-%d")
-    in_end    = (today + timedelta(days=150)).strftime("%Y-%m-%d")
+    out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
+    ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
 
-    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
+    # Map your entity to airport code
+    airport_map = {
+        "City:honolulu_hi_us": "HNL",  # Honolulu
+        "City:denpasar_id": "DPS",     # Bali
+        "City:london_gb": "LHR",       # London Heathrow
+        # Add Aruba if needed: "City:oranjestad_aw": "AUA"
+    }
+    dest_code = airport_map.get(dest_entity, "XXX")  # fallback
+
+    url = "https://google-flights2.p.rapidapi.com/search"
     params = {
-        "source": "City:amsterdam_nl",
-        "destination": dest_entity,
+        "origin": "AMS",           # Amsterdam Schiphol
+        "destination": dest_code,
+        "date": out_date,
+        "returnDate": ret_date,
+        "adults": "1",
         "currency": "EUR",
-        "locale": "en",
-        "adults": 1,
-        "cabinClass": "ECONOMY",
-        "sortBy": "PRICE",
-        "sortOrder": "ASCENDING",
-        "outboundDepartmentDateStart": out_start,
-        "outboundDepartmentDateEnd": out_end,
-        "inboundDepartureDateStart": in_start,
-        "inboundDepartureDateEnd": in_end,
-        "limit": 1
+        "sort": "price"            # cheapest first
     }
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "kiwi-com-cheap-flights.p.rapidapi.com"
+        "x-rapidapi-host": "google-flights2.p.rapidapi.com"
     }
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
-        logger.info(f"Kiwi API status for {dest_entity}: {res.status_code}")
+        logger.info(f"Google Flights API status for {dest_entity}: {res.status_code}")
         res.raise_for_status()
         data = res.json()
-        logger.info(f"Kiwi raw response keys: {list(data.keys())}")  # debug
+        logger.info(f"Google Flights raw response keys: {list(data.keys())}")  # debug
 
-        itineraries = data.get('itineraries', [])
-        if not itineraries:
+        flights = data.get("flights", [])
+        if not flights:
             return "No offers found in the selected window, Sir."
 
-        itin = itineraries[0]
-        price = f"€{itin.get('price', {}).get('amount', '—')}"
+        # Get cheapest
+        cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
+        price = f"€{cheapest.get('price', '—')}"
 
-        # Try to extract basic details if available
-        details = []
-        if 'flyFrom' in itin and 'flyTo' in itin:
-            details.append(f"Route: {itin['flyFrom']} → {itin['flyTo']}")
-        if 'duration' in itin:
-            dur_min = itin['duration']
-            details.append(f"Duration: {dur_min//60}h {dur_min%60:02d}min")
-        if 'airlines' in itin and itin['airlines']:
-            details.append(f"Airlines: {', '.join(itin['airlines'])}")
+        # Outbound
+        outbound = cheapest.get("departure", {})
+        out_dep = outbound.get("departureTime", "—")
+        out_arr = outbound.get("arrivalTime", "—")
+        out_airline = outbound.get("airline", "—")
+        out_flight_no = outbound.get("flightNumber", "—")
+        out_stops = outbound.get("stops", 0)
 
-        detail_str = "\n".join(details) if details else "Limited details available"
+        # Return
+        inbound = cheapest.get("return", {})
+        ret_dep = inbound.get("departureTime", "—")
+        ret_arr = inbound.get("arrivalTime", "—")
+        ret_airline = inbound.get("airline", "—")
+        ret_flight_no = inbound.get("flightNumber", "—")
+        ret_stops = inbound.get("stops", 0)
 
-        return f"💰 **{price}**\n{detail_str}\n(For full itinerary, booking links may be available via external sites.)"
-
+        return (
+            f"💰 **{price}**\n"
+            f"🛫 **Outbound:** {out_dep} → {out_arr} ({out_airline} {out_flight_no}, {out_stops} stops)\n"
+            f"🛬 **Return:** {ret_dep} → {ret_arr} ({ret_airline} {ret_flight_no}, {ret_stops} stops)"
+        )
     except Exception as e:
-        logger.error(f"Search error for {dest_entity}: {e}")
+        logger.error(f"Flight search error for {dest_entity}: {e}")
         return "The details are currently elusive, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
