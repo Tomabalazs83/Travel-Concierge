@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 ai_brain = None
 try:
     if not GEMINI_KEY:
-        logger.warning("GEMINI_KEY not set → AI disabled")
+        logger.warning("GEMINI_KEY not set → AI features disabled")
     else:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
@@ -46,6 +46,7 @@ except Exception as e:
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
     today = dt.now()
+    # Shorter, more realistic range for Kiwi to return results
     out_start = (today + timedelta(days=30)).strftime("%Y-%m-%d")
     out_end   = (today + timedelta(days=90)).strftime("%Y-%m-%d")
     in_start  = (today + timedelta(days=100)).strftime("%Y-%m-%d")
@@ -77,27 +78,30 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
         res.raise_for_status()
         data = res.json()
         logger.info(f"Kiwi raw response keys: {list(data.keys())}")  # debug
+        logger.info(f"Kiwi response preview: {str(data)[:500]}...")  # first 500 chars for debugging
 
         itineraries = data.get('itineraries', [])
         if not itineraries:
-            return "No offers found in the selected window, Sir. Perhaps a different date range or destination?"
+            return "No offers found in the next few months, Sir. Perhaps try a closer date range?"
 
         itin = itineraries[0]
         price = f"€{itin.get('price', {}).get('amount', '—')}"
 
-        # Extract any available details
+        # Extract as many details as possible
         details = []
         if 'flyFrom' in itin and 'flyTo' in itin:
             details.append(f"Route: {itin['flyFrom']} → {itin['flyTo']}")
         if 'duration' in itin:
             dur_min = itin['duration']
-            details.append(f"Duration: {dur_min//60}h {dur_min%60:02d}min")
+            details.append(f"Total duration: {dur_min//60}h {dur_min%60:02d}min")
         if 'airlines' in itin and itin['airlines']:
             details.append(f"Airlines: {', '.join(itin['airlines'])}")
         if 'route' in itin and itin['route']:
             route = itin['route'][0]
             details.append(f"Departure: {route.get('local_departure', '—')[:16].replace('T', ' ')}")
             details.append(f"Arrival: {route.get('local_arrival', '—')[:16].replace('T', ' ')}")
+        if 'stops' in itin:
+            details.append(f"Stops: {itin['stops']}")
 
         detail_str = "\n".join(details) if details else "Limited details available (price only from Kiwi.com)"
 
