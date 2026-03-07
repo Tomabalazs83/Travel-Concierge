@@ -36,8 +36,7 @@ try:
             system_instruction=(
                 "You are Jeeves, a sophisticated British butler. "
                 "Always address the user as 'Sir'. "
-                "Be witty, dry, concise, and elegant in your replies. "
-                "When referring to flight data from previous messages or briefings, recall and use the exact details accurately."
+                "Be witty, dry, concise, and elegant in your replies."
             )
         )
         logger.info("Concierge initialized with gemini-2.5-flash-lite")
@@ -46,77 +45,68 @@ except Exception as e:
 
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
-    """
-    Uses Google Flights RapidAPI endpoint for detailed round-trip info.
-    Returns price + times, airline, flight no, stops.
-    """
     today = dt.now()
-    out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
-    ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
+    out_start = (today + timedelta(days=90)).strftime("%Y-%m-%d")
+    out_end   = (today + timedelta(days=105)).strftime("%Y-%m-%d")
+    in_start  = (today + timedelta(days=110)).strftime("%Y-%m-%d")
+    in_end    = (today + timedelta(days=150)).strftime("%Y-%m-%d")
 
-    # Map your entity to airport code
-    airport_map = {
-        "City:honolulu_hi_us": "HNL",  # Honolulu
-        "City:denpasar_id": "DPS",     # Bali
-        "City:london_gb": "LHR",       # London Heathrow
-        # Add Aruba if needed: "City:oranjestad_aw": "AUA"
-    }
-    dest_code = airport_map.get(dest_entity, "XXX")  # fallback
-
-    url = "https://google-flights2.p.rapidapi.com/search"
+    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/search"
     params = {
-        "origin": "AMS",           # Amsterdam Schiphol
-        "destination": dest_code,
-        "date": out_date,
-        "returnDate": ret_date,
-        "adults": "1",
+        "fly_from": "AMS",
+        "fly_to": dest_entity.split(':')[-1].upper(),  # e.g. DPS for Bali
+        "date_from": out_start,
+        "date_to": out_end,
+        "return_from": in_start,
+        "return_to": in_end,
         "currency": "EUR",
-        "sort": "price"            # cheapest first
+        "adults": "1",
+        "sort": "price",
+        "limit": "1"
     }
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "google-flights2.p.rapidapi.com"
+        "x-rapidapi-host": "kiwi-com-cheap-flights.p.rapidapi.com"
     }
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
-        logger.info(f"Google Flights API status for {dest_entity}: {res.status_code}")
+        logger.info(f"Kiwi search API status for {dest_entity}: {res.status_code}")
         res.raise_for_status()
         data = res.json()
-        logger.info(f"Google Flights raw response keys: {list(data.keys())}")  # debug
+        logger.info(f"Kiwi raw response keys: {list(data.keys())}")  # debug
 
-        flights = data.get("flights", [])
-        if not flights:
+        itineraries = data.get('data', [])
+        if not itineraries:
             return "No offers found in the selected window, Sir."
 
-        # Get cheapest
-        cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
-        price = f"€{cheapest.get('price', '—')}"
+        itin = itineraries[0]
+        price = f"€{itin.get('price', '—')}"
 
-        # Outbound
-        outbound = cheapest.get("departure", {})
-        out_dep = outbound.get("departureTime", "—")
-        out_arr = outbound.get("arrivalTime", "—")
-        out_airline = outbound.get("airline", "—")
-        out_flight_no = outbound.get("flightNumber", "—")
-        out_stops = outbound.get("stops", 0)
+        # Parse outbound leg
+        out_route = itin.get('route', [{}])[0]
+        out_dep = out_route.get('local_departure', "—")[:16].replace('T', ' ')
+        out_arr = out_route.get('local_arrival', "—")[:16].replace('T', ' ')
+        out_airline = out_route.get('airline', "—")
+        out_flight = out_route.get('flight_no', "—")
+        out_stops = out_route.get('stops', 0)
 
-        # Return
-        inbound = cheapest.get("return", {})
-        ret_dep = inbound.get("departureTime", "—")
-        ret_arr = inbound.get("arrivalTime", "—")
-        ret_airline = inbound.get("airline", "—")
-        ret_flight_no = inbound.get("flightNumber", "—")
-        ret_stops = inbound.get("stops", 0)
+        # Parse return leg
+        in_route = itin.get('route', [{}])[1]
+        in_dep = in_route.get('local_departure', "—")[:16].replace('T', ' ')
+        in_arr = in_route.get('local_arrival', "—")[:16].replace('T', ' ')
+        in_airline = in_route.get('airline', "—")
+        in_flight = in_route.get('flight_no', "—")
+        in_stops = in_route.get('stops', 0)
 
         return (
             f"💰 **{price}**\n"
-            f"🛫 **Outbound:** {out_dep} → {out_arr} ({out_airline} {out_flight_no}, {out_stops} stops)\n"
-            f"🛬 **Return:** {ret_dep} → {ret_arr} ({ret_airline} {ret_flight_no}, {ret_stops} stops)"
+            f"🛫 **Outbound:** {out_dep} → {out_arr} ({out_airline} {out_flight}, {out_stops} stops)\n"
+            f"🛬 **Return:** {in_dep} → {in_arr} ({in_airline} {in_flight}, {in_stops} stops)"
         )
     except Exception as e:
-        logger.error(f"Flight search error for {dest_entity}: {e}")
-        return "The details are currently elusive, Sir."
+        logger.error(f"Search error for {dest_entity}: {e}")
+        return "The details are currently elusive, Sir. Perhaps try a different date range."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -130,7 +120,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
-        logger.info("New persistent chat session created")
+        logger.info("New chat session created")
 
     chat_session = context.user_data['chat_session']
 
