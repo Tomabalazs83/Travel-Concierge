@@ -46,23 +46,25 @@ except Exception as e:
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
     today = dt.now()
-    out_start = (today + timedelta(days=90)).strftime("%Y-%m-%d")
-    out_end   = (today + timedelta(days=105)).strftime("%Y-%m-%d")
-    in_start  = (today + timedelta(days=110)).strftime("%Y-%m-%d")
+    out_start = (today + timedelta(days=30)).strftime("%Y-%m-%d")
+    out_end   = (today + timedelta(days=90)).strftime("%Y-%m-%d")
+    in_start  = (today + timedelta(days=100)).strftime("%Y-%m-%d")
     in_end    = (today + timedelta(days=150)).strftime("%Y-%m-%d")
 
-    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/search"
+    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
     params = {
-        "fly_from": "AMS",
-        "fly_to": dest_entity.split(':')[-1].upper(),  # e.g. DPS for Bali
-        "date_from": out_start,
-        "date_to": out_end,
-        "return_from": in_start,
-        "return_to": in_end,
+        "source": "City:amsterdam_nl",
+        "destination": dest_entity,
         "currency": "EUR",
-        "adults": "1",
-        "sort": "price",
-        "limit": "1"
+        "locale": "en",
+        "adults": 1,
+        "sortBy": "PRICE",
+        "sortOrder": "ASCENDING",
+        "outboundDepartmentDateStart": out_start,
+        "outboundDepartmentDateEnd": out_end,
+        "inboundDepartureDateStart": in_start,
+        "inboundDepartureDateEnd": in_end,
+        "limit": 1
     }
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
@@ -71,42 +73,39 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
 
     try:
         res = requests.get(url, headers=headers, params=params, timeout=20)
-        logger.info(f"Kiwi search API status for {dest_entity}: {res.status_code}")
+        logger.info(f"Kiwi round-trip API status for {dest_entity}: {res.status_code}")
         res.raise_for_status()
         data = res.json()
         logger.info(f"Kiwi raw response keys: {list(data.keys())}")  # debug
 
-        itineraries = data.get('data', [])
+        itineraries = data.get('itineraries', [])
         if not itineraries:
-            return "No offers found in the selected window, Sir."
+            return "No offers found in the selected window, Sir. Perhaps a different date range or destination?"
 
         itin = itineraries[0]
-        price = f"€{itin.get('price', '—')}"
+        price = f"€{itin.get('price', {}).get('amount', '—')}"
 
-        # Parse outbound leg
-        out_route = itin.get('route', [{}])[0]
-        out_dep = out_route.get('local_departure', "—")[:16].replace('T', ' ')
-        out_arr = out_route.get('local_arrival', "—")[:16].replace('T', ' ')
-        out_airline = out_route.get('airline', "—")
-        out_flight = out_route.get('flight_no', "—")
-        out_stops = out_route.get('stops', 0)
+        # Extract any available details
+        details = []
+        if 'flyFrom' in itin and 'flyTo' in itin:
+            details.append(f"Route: {itin['flyFrom']} → {itin['flyTo']}")
+        if 'duration' in itin:
+            dur_min = itin['duration']
+            details.append(f"Duration: {dur_min//60}h {dur_min%60:02d}min")
+        if 'airlines' in itin and itin['airlines']:
+            details.append(f"Airlines: {', '.join(itin['airlines'])}")
+        if 'route' in itin and itin['route']:
+            route = itin['route'][0]
+            details.append(f"Departure: {route.get('local_departure', '—')[:16].replace('T', ' ')}")
+            details.append(f"Arrival: {route.get('local_arrival', '—')[:16].replace('T', ' ')}")
 
-        # Parse return leg
-        in_route = itin.get('route', [{}])[1]
-        in_dep = in_route.get('local_departure', "—")[:16].replace('T', ' ')
-        in_arr = in_route.get('local_arrival', "—")[:16].replace('T', ' ')
-        in_airline = in_route.get('airline', "—")
-        in_flight = in_route.get('flight_no', "—")
-        in_stops = in_route.get('stops', 0)
+        detail_str = "\n".join(details) if details else "Limited details available (price only from Kiwi.com)"
 
-        return (
-            f"💰 **{price}**\n"
-            f"🛫 **Outbound:** {out_dep} → {out_arr} ({out_airline} {out_flight}, {out_stops} stops)\n"
-            f"🛬 **Return:** {in_dep} → {in_arr} ({in_airline} {in_flight}, {in_stops} stops)"
-        )
+        return f"💰 **{price}**\n{detail_str}"
+
     except Exception as e:
         logger.error(f"Search error for {dest_entity}: {e}")
-        return "The details are currently elusive, Sir. Perhaps try a different date range."
+        return "The details are currently elusive, Sir. Perhaps a different date range?"
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
