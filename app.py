@@ -1,5 +1,6 @@
 import os
-import requests
+import http.client
+import json
 import datetime
 import logging
 import asyncio
@@ -28,16 +29,15 @@ logger = logging.getLogger(__name__)
 ai_brain = None
 try:
     if not GEMINI_KEY:
-        logger.warning("GEMINI_KEY not set → AI features disabled")
+        logger.warning("GEMINI_KEY not set → AI disabled")
     else:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
-            "gemini-2.5-flash-lite",  # your current working model
+            "gemini-2.5-flash-lite",
             system_instruction=(
                 "You are Jeeves, a sophisticated British butler. "
                 "Always address the user as 'Sir'. "
-                "Be witty, dry, concise, and elegant in your replies. "
-                "Remember previous context in the conversation, including any flight briefings or prices mentioned earlier."
+                "Be witty, dry, concise, and elegant in your replies."
             )
         )
         logger.info("Concierge initialized with gemini-2.5-flash-lite")
@@ -47,52 +47,72 @@ except Exception as e:
 # ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_cheapest_roundtrip_info(dest_entity: str) -> str:
     today = dt.now()
-    out_start = (today + timedelta(days=90)).strftime("%Y-%m-%dT00:00:00")
-    out_end = (today + timedelta(days=105)).strftime("%Y-%m-%dT00:00:00")
-    in_start = (today + timedelta(days=110)).strftime("%Y-%m-%dT00:00:00")
-    in_end = (today + timedelta(days=150)).strftime("%Y-%m-%dT00:00:00")
-    url = "https://kiwi-com-cheap-flights.p.rapidapi.com/round-trip"
-    params = {
-        "source": "City:amsterdam_nl",
-        "destination": dest_entity,
-        "currency": "EUR",
-        "limit": 1,
-        "outboundDepartmentDateStart": out_start,
-        "outboundDepartmentDateEnd": out_end,
-        "inboundDepartureDateStart": in_start,
-        "inboundDepartureDateEnd": in_end,
+    out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
+    ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
+
+    # Airport code map
+    airport_map = {
+        "City:honolulu_hi_us": "HNL",
+        "City:denpasar_id": "DPS",
+        "City:london_gb": "LHR"
     }
+    dest_code = airport_map.get(dest_entity, "XXX")
+
+    conn = http.client.HTTPSConnection("google-flights-data.p.rapidapi.com")
     headers = {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "kiwi-com-cheap-flights.p.rapidapi.com"
+        'x-rapidapi-key': RAPIDAPI_KEY,
+        'x-rapidapi-host': "google-flights-data.p.rapidapi.com"
     }
+
+    # Example path for search (adjust based on docs; this is for booking-details style, may need /search-flights)
+    path = f"/flights/search?origin=AMS&destination={dest_code}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR"
+
     try:
-        res = requests.get(url, headers=headers, params=params, timeout=20)
-        res.raise_for_status()
-        data = res.json()
-        itineraries = data.get('itineraries') or data.get('data', {}).get('itineraries') or []
-        if not itineraries:
-            return "No offers found, Sir."
-        itin = itineraries[0]
-        price = f"€{itin.get('price', {}).get('amount', '—')}"
-        def parse_leg(leg_name):
-            leg = itin.get(leg_name, {})
-            sects = leg.get('sectors', [])
-            if not sects:
-                return "N/A", "—", "—", 0
-            f_nums = [f"{s.get('airline', {}).get('code', '??')}{s.get('number', '')}" for s in sects]
-            dep = (sects[0].get('local_departure') or "—")[:16].replace('T', ' ')
-            arr = (sects[-1].get('local_arrival') or "—")[:16].replace('T', ' ')
-            return ", ".join(f_nums), dep, arr, len(sects)-1
-        out_f, out_d, out_a, out_s = parse_leg('outbound')
-        ret_f, ret_d, ret_a, ret_s = parse_leg('inbound')
-        return (
-            f"💰 **{price}**\n"
-            f"🛫 **Outbound:** {out_d} → {out_a} ({out_f}, {out_s} stops)\n"
-            f"🛬 **Return:** {ret_d} → {ret_a} ({ret_f}, {ret_s} stops)"
-        )
+        conn.request("GET", path, headers=headers)
+        res = conn.getresponse()
+        data = res.read()
+        logger.info(f"Google Flights API status for {dest_entity}: {res.status}")
+        logger.info(f"Google Flights response preview: {data.decode('utf-8')[:500]}...")  # debug
+
+        if res.status != 200:
+            return f"API error ({res.status}), Sir. Details are currently elusive."
+
+        try:
+            response_json = json.loads(data)
+            # Adjust parsing based on actual response structure (example below)
+            flights = response_json.get("flights", [])
+            if not flights:
+                return "No offers found, Sir."
+
+            # Get cheapest
+            cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
+            price = f"€{cheapest.get('price', '—')}"
+
+            # Outbound
+            outbound = cheapest.get("outbound", {})
+            out_dep = outbound.get("departure", "—")
+            out_arr = outbound.get("arrival", "—")
+            out_airline = outbound.get("airline", "—")
+            out_flight = outbound.get("flightNumber", "—")
+            out_stops = outbound.get("stops", 0)
+
+            # Return
+            inbound = cheapest.get("inbound", {})
+            in_dep = inbound.get("departure", "—")
+            in_arr = inbound.get("arrival", "—")
+            in_airline = inbound.get("airline", "—")
+            in_flight = inbound.get("flightNumber", "—")
+            in_stops = inbound.get("stops", 0)
+
+            return (
+                f"💰 **{price}**\n"
+                f"🛫 **Outbound:** {out_dep} → {out_arr} ({out_airline} {out_flight}, {out_stops} stops)\n"
+                f"🛬 **Return:** {in_dep} → {in_arr} ({in_airline} {in_flight}, {in_stops} stops)"
+            )
+        except json.JSONDecodeError:
+            return "API response malformed, Sir. Details are elusive."
     except Exception as e:
-        logger.error(f"Search error for {dest_entity}: {e}")
+        logger.error(f"Flight search error for {dest_entity}: {e}")
         return "The details are currently elusive, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
@@ -105,10 +125,9 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_text:
         return
 
-    # Create persistent session only once per user
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
-        logger.info("New persistent chat session created")
+        logger.info("New chat session created")
 
     chat_session = context.user_data['chat_session']
 
@@ -148,14 +167,12 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Reuse the persistent session (created in /start or first chat)
         if 'chat_session' not in context.user_data:
             context.user_data['chat_session'] = ai_brain.start_chat(history=[])
-            logger.info(f"Fallback session created in daily_brief for {chat_id}")
         chat_session = context.user_data['chat_session']
 
         analysis_res = chat_session.send_message(
-            f"Provide a witty, dry, two-sentence analysis of these flight prices for Sir: {data_for_ai}"
+            f"Provide a witty, dry, two-sentence analysis of these flight prices and details for Sir: {data_for_ai}"
         )
         await context.bot.send_message(
             chat_id=chat_id,
@@ -173,7 +190,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     context.user_data['chat_id'] = chat_id
 
-    # Create persistent session only if not already exists
     if ai_brain and 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
         logger.info(f"Persistent chat session created for user {chat_id}")
@@ -197,12 +213,6 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['chat_id'] = update.effective_chat.id
     await daily_brief(context)
 
-# Optional: Add memory reset command
-async def clear_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if 'chat_session' in context.user_data:
-        del context.user_data['chat_session']
-    await update.message.reply_text("Memory refreshed, Sir. A clean slate, as it were.")
-
 # ─── MAIN ────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     if not TELEGRAM_TOKEN:
@@ -220,14 +230,12 @@ if __name__ == '__main__':
         .build()
     )
 
-    # Run async delete_webhook
     loop = asyncio.get_event_loop()
     loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
     logger.info("Webhook cleaned, pending updates dropped")
 
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('check', check_now))
-    app.add_handler(CommandHandler('clear', clear_memory))  # ← added
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
     logger.info("Bot handlers registered. Starting polling...")
