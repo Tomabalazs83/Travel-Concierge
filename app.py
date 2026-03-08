@@ -64,8 +64,8 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
         'x-rapidapi-host': "google-flights-data.p.rapidapi.com"
     }
 
-    # Example path for search (adjust based on docs; this is for booking-details style, may need /search-flights)
-    path = f"/flights/search?origin=AMS&destination={dest_code}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR"
+    # Use the correct endpoint from your docs
+    path = f"/flights/search-roundtrip?origin=AMS&destination={dest_code}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR"
 
     try:
         conn.request("GET", path, headers=headers)
@@ -79,27 +79,27 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
 
         try:
             response_json = json.loads(data)
-            # Adjust parsing based on actual response structure (example below)
-            flights = response_json.get("flights", [])
-            if not flights:
+            # Adjust based on actual response structure (example; check log preview)
+            trips = response_json.get("trips", []) or response_json.get("flights", []) or []
+            if not trips:
                 return "No offers found, Sir."
 
-            # Get cheapest
-            cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
+            # Get cheapest round-trip
+            cheapest = min(trips, key=lambda t: t.get("price", float("inf")))
             price = f"€{cheapest.get('price', '—')}"
 
             # Outbound
             outbound = cheapest.get("outbound", {})
-            out_dep = outbound.get("departure", "—")
-            out_arr = outbound.get("arrival", "—")
+            out_dep = outbound.get("departureTime", "—")[:16].replace('T', ' ')
+            out_arr = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
             out_airline = outbound.get("airline", "—")
             out_flight = outbound.get("flightNumber", "—")
             out_stops = outbound.get("stops", 0)
 
             # Return
             inbound = cheapest.get("inbound", {})
-            in_dep = inbound.get("departure", "—")
-            in_arr = inbound.get("arrival", "—")
+            in_dep = inbound.get("departureTime", "—")[:16].replace('T', ' ')
+            in_arr = inbound.get("arrivalTime", "—")[:16].replace('T', ' ')
             in_airline = inbound.get("airline", "—")
             in_flight = inbound.get("flightNumber", "—")
             in_stops = inbound.get("stops", 0)
