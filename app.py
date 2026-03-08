@@ -44,81 +44,97 @@ try:
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
 
-# ─── FLIGHT SEARCH TOOL ──────────────────────────────────────────────────────────
-def get_cheapest_roundtrip_info(dest_entity: str) -> str:
+# ─── FLIGHT & HOTEL SEARCH TOOL (Booking.com API) ────────────────────────────────
+def get_travel_info(dest_entity: str) -> str:
     today = dt.now()
     out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
     ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
 
-    # Google Flights internal numeric airport IDs (required)
-    airport_id_map = {
-        "City:honolulu_hi_us": "1488",  # HNL - Honolulu
-        "City:denpasar_id": "1489",     # DPS - Denpasar Bali
-        "City:london_gb": "1461"        # LHR - London Heathrow
+    # Airport/city code map (Booking.com uses IATA or city codes)
+    airport_map = {
+        "City:honolulu_hi_us": "HNL",
+        "City:denpasar_id": "DPS",
+        "City:london_gb": "LON"  # LON = all London airports
     }
+    dest_code = airport_map.get(dest_entity, "XXX")
 
-    origin_id = "178239"  # AMS - Amsterdam Schiphol (fixed)
-    dest_id = airport_id_map.get(dest_entity, "")
-
-    if not dest_id:
-        return "Invalid airport mapping, Sir."
-
-    conn = http.client.HTTPSConnection("google-flights-data.p.rapidapi.com")
+    conn = http.client.HTTPSConnection("booking-com15.p.rapidapi.com")
     headers = {
         'x-rapidapi-key': RAPIDAPI_KEY,
-        'x-rapidapi-host': "google-flights-data.p.rapidapi.com"
+        'x-rapidapi-host': "booking-com15.p.rapidapi.com"
     }
 
-    # Use the correct endpoint
-    path = f"/flights/search-roundtrip?departureId={origin_id}&arrivalId={dest_id}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR"
+    flight_info = ""
+    hotel_info = ""
 
+    # ─── 1. Flight search ────────────────────────────────────────────────────────
     try:
-        conn.request("GET", path, headers=headers)
+        flight_path = f"/api/v1/flights/search?origin=AMS&destination={dest_code}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR&sort=price"
+        conn.request("GET", flight_path, headers=headers)
         res = conn.getresponse()
         data = res.read()
-        logger.info(f"Google Flights API status for {dest_entity}: {res.status}")
+        logger.info(f"Booking.com Flights API status for {dest_entity}: {res.status}")
         response_text = data.decode('utf-8')
-        logger.info(f"Google Flights response preview: {response_text[:500]}...")  # debug
+        logger.info(f"Flights response preview: {response_text[:500]}...")
 
-        if res.status != 200:
-            return f"API error ({res.status}), Sir. Details are elusive."
-
-        try:
-            response_json = json.loads(response_text)
-            # Parsing (adjust after seeing the preview in logs)
-            trips = response_json.get("trips", []) or response_json.get("flights", []) or response_json.get("results", []) or []
-            if not trips:
-                return "No offers found, Sir."
-
-            cheapest = min(trips, key=lambda t: t.get("price", float("inf")))
-            price = f"€{cheapest.get('price', '—')}"
-
-            # Outbound
-            outbound = cheapest.get("outbound", {}) or cheapest.get("departure", {})
-            out_dep = outbound.get("departureTime", "—")[:16].replace('T', ' ')
-            out_arr = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
-            out_airline = outbound.get("airline", "—")
-            out_flight = outbound.get("flightNumber", "—")
-            out_stops = outbound.get("stops", 0)
-
-            # Return
-            inbound = cheapest.get("inbound", {}) or cheapest.get("return", {})
-            in_dep = inbound.get("departureTime", "—")[:16].replace('T', ' ')
-            in_arr = inbound.get("arrivalTime", "—")[:16].replace('T', ' ')
-            in_airline = inbound.get("airline", "—")
-            in_flight = inbound.get("flightNumber", "—")
-            in_stops = inbound.get("stops", 0)
-
-            return (
-                f"💰 **{price}**\n"
-                f"🛫 **Outbound:** {out_dep} → {out_arr} ({out_airline} {out_flight}, {out_stops} stops)\n"
-                f"🛬 **Return:** {in_dep} → {in_arr} ({in_airline} {in_flight}, {in_stops} stops)"
-            )
-        except json.JSONDecodeError:
-            return "API response malformed, Sir."
+        if res.status == 200:
+            try:
+                flight_json = json.loads(response_text)
+                flights = flight_json.get("flights", []) or flight_json.get("results", []) or []
+                if flights:
+                    cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
+                    price = f"€{cheapest.get('price', '—')}"
+                    outbound = cheapest.get("outbound", {})
+                    out_dep = outbound.get("departureTime", "—")[:16].replace('T', ' ')
+                    out_arr = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
+                    out_airline = outbound.get("airline", "—")
+                    flight_info = f"💰 **{price}**\n🛫 Outbound: {out_dep} → {out_arr} ({out_airline})"
+                else:
+                    flight_info = "No flight offers found."
+            except:
+                flight_info = "Flight data parsing failed."
+        else:
+            flight_info = f"Flight API error ({res.status})."
     except Exception as e:
-        logger.error(f"Flight search error for {dest_entity}: {e}")
-        return "The details are currently elusive, Sir."
+        logger.error(f"Booking.com flight error: {e}")
+        flight_info = "Flights currently elusive, Sir."
+
+    # ─── 2. Hotel search (min 4 stars, during stay period) ───────────────────────
+    try:
+        # Assume stay from outbound arrival to return departure (simplified)
+        checkin = out_date  # approximate
+        checkout = ret_date
+
+        hotel_path = f"/api/v1/hotels/search?location={dest_code}&checkin_date={checkin}&checkout_date={checkout}&adults=1&stars=4,5&currency=EUR&sort=price"
+        conn.request("GET", hotel_path, headers=headers)
+        res = conn.getresponse()
+        data = res.read()
+        logger.info(f"Booking.com Hotels API status for {dest_entity}: {res.status}")
+        response_text = data.decode('utf-8')
+        logger.info(f"Hotels response preview: {response_text[:500]}...")
+
+        if res.status == 200:
+            try:
+                hotel_json = json.loads(response_text)
+                hotels = hotel_json.get("hotels", []) or hotel_json.get("results", []) or []
+                if hotels:
+                    # Cheapest 4+ star hotel
+                    cheapest_hotel = min(hotels, key=lambda h: h.get("price", float("inf")))
+                    hotel_name = cheapest_hotel.get("name", "Unknown Hotel")
+                    hotel_address = cheapest_hotel.get("address", "Address not provided")
+                    hotel_price = f"€{cheapest_hotel.get('price', '—')} for stay"
+                    hotel_info = f"🏨 **Recommended hotel:** {hotel_name}\n   {hotel_address}\n   {hotel_price}"
+                else:
+                    hotel_info = "No suitable 4+ star hotels found."
+            except:
+                hotel_info = "Hotel data parsing failed."
+        else:
+            hotel_info = f"Hotel API error ({res.status})."
+    except Exception as e:
+        logger.error(f"Booking.com hotel error: {e}")
+        hotel_info = "Hotels currently elusive, Sir."
+
+    return f"{flight_info}\n\n{hotel_info}" if flight_info or hotel_info else "The details are currently elusive, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,7 +177,7 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     data_for_ai = ""
 
     for name, entity in options.items():
-        info = get_cheapest_roundtrip_info(entity)
+        info = get_travel_info(entity)
         report += f"✈️ **{name}**:\n{info}\n\n"
         data_for_ai += f"{name}: {info}. "
 
@@ -177,7 +193,7 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         chat_session = context.user_data['chat_session']
 
         analysis_res = chat_session.send_message(
-            f"Provide a witty, dry, two-sentence analysis of these flight prices and details for Sir: {data_for_ai}"
+            f"Provide a witty, dry, two-sentence analysis of these travel options (flights and hotels) for Sir: {data_for_ai}"
         )
         await context.bot.send_message(
             chat_id=chat_id,
