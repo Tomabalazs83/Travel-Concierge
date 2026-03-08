@@ -50,13 +50,19 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
     out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
     ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
 
-    # Airport code map
-    airport_map = {
-        "City:honolulu_hi_us": "HNL",
-        "City:denpasar_id": "DPS",
-        "City:london_gb": "LHR"
+    # Google Flights internal numeric airport IDs (required instead of IATA codes)
+    airport_id_map = {
+        "AMS": "178239",   # Amsterdam Schiphol
+        "HNL": "1488",     # Honolulu International
+        "DPS": "1489",     # Denpasar Ngurah Rai (Bali)
+        "LHR": "1461"      # London Heathrow
     }
-    dest_code = airport_map.get(dest_entity, "XXX")
+
+    origin_id = airport_id_map.get("AMS", "")
+    dest_id = airport_id_map.get(dest_entity.split(':')[-1].upper(), "")
+
+    if not origin_id or not dest_id:
+        return "Invalid airport mapping, Sir."
 
     conn = http.client.HTTPSConnection("google-flights-data.p.rapidapi.com")
     headers = {
@@ -64,8 +70,8 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
         'x-rapidapi-host': "google-flights-data.p.rapidapi.com"
     }
 
-    # Use the correct endpoint from your docs: /flights/search-roundtrip
-    path = f"/flights/search-roundtrip?origin=AMS&destination={dest_code}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR"
+    # Use the correct endpoint from your docs
+    path = f"/flights/search-roundtrip?departureId={origin_id}&arrivalId={dest_id}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR"
 
     try:
         conn.request("GET", path, headers=headers)
@@ -79,7 +85,7 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
 
         try:
             response_json = json.loads(data)
-            # Parsing (adjust based on preview in log)
+            # Parsing - adjust based on actual response structure (check log preview)
             trips = response_json.get("trips", []) or response_json.get("flights", []) or response_json.get("results", [])
             if not trips:
                 return "No offers found, Sir."
@@ -87,7 +93,7 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
             cheapest = min(trips, key=lambda t: t.get("price", float("inf")))
             price = f"€{cheapest.get('price', '—')}"
 
-            # Outbound
+            # Outbound leg
             outbound = cheapest.get("outbound", {}) or cheapest.get("departure", {})
             out_dep = outbound.get("departureTime", "—")[:16].replace('T', ' ')
             out_arr = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
@@ -95,7 +101,7 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
             out_flight = outbound.get("flightNumber", "—")
             out_stops = outbound.get("stops", 0)
 
-            # Return
+            # Return leg
             inbound = cheapest.get("inbound", {}) or cheapest.get("return", {})
             in_dep = inbound.get("departureTime", "—")[:16].replace('T', ' ')
             in_arr = inbound.get("arrivalTime", "—")[:16].replace('T', ' ')
@@ -109,7 +115,7 @@ def get_cheapest_roundtrip_info(dest_entity: str) -> str:
                 f"🛬 **Return:** {in_dep} → {in_arr} ({in_airline} {in_flight}, {in_stops} stops)"
             )
         except json.JSONDecodeError:
-            return "API response malformed, Sir."
+            return "API response malformed, Sir. Details are elusive."
     except Exception as e:
         logger.error(f"Flight search error for {dest_entity}: {e}")
         return "The details are currently elusive, Sir."
