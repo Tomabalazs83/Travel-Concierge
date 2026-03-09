@@ -50,11 +50,10 @@ def get_travel_info(dest_entity: str) -> str:
     out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
     ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
 
-    # Destination code map (Booking.com uses IATA or city codes)
     dest_map = {
         "City:honolulu_hi_us": "HNL",
         "City:denpasar_id": "DPS",
-        "City:london_gb": "LON"
+        "City:london_gb": "LON"  # All London airports
     }
     dest_code = dest_map.get(dest_entity, "XXX")
 
@@ -67,70 +66,204 @@ def get_travel_info(dest_entity: str) -> str:
     flight_info = ""
     hotel_info = ""
 
-    # 1. Round-trip flight search
+    # 1. Round-trip flight search (correct endpoint)
     try:
-        flight_path = f"/api/v1/flights/search-roundtrip?origin=AMS&destination={dest_code}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR&sort=price"
+        flight_path = f"/flights/search-roundtrip?origin=AMS&destination={dest_code}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR&sort=price"
         conn.request("GET", flight_path, headers=headers)
         res = conn.getresponse()
         data = res.read()
-        logger.info(f"Booking.com Flights API status: {res.status}")
-        logger.info(f"Flights preview: {data.decode('utf-8')[:500]}...")
+        response_text = data.decode('utf-8')
+        logger.info(f"Booking.com Flights API status for {dest_entity}: {res.status}")
+        logger.info(f"Flights preview: {response_text[:500]}...")
 
         if res.status == 200:
-            flight_json = json.loads(data)
-            flights = flight_json.get("flights", []) or []
-            if flights:
-                cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
-                price = f"€{cheapest.get('price', '—')}"
-                outbound = cheapest.get("outbound", {})
-                out_dep = outbound.get("departureTime", "—")
-                out_arr = outbound.get("arrivalTime", "—")
-                flight_info = f"💰 Flight price: {price}\nOutbound: {out_dep} → {out_arr}"
-            else:
-                flight_info = "No flights found."
+            try:
+                flight_json = json.loads(response_text)
+                flights = flight_json.get("flights", []) or flight_json.get("results", []) or []
+                if flights:
+                    cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
+                    price = f"€{cheapest.get('price', '—')}"
+                    outbound = cheapest.get("outbound", {})
+                    out_dep = outbound.get("departureTime", "—")[:16].replace('T', ' ')
+                    out_arr = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
+                    out_airline = outbound.get("airline", "—")
+                    flight_info = f"💰 **Flight price:** {price}\n🛫 Outbound: {out_dep} → {out_arr} ({out_airline})"
+                else:
+                    flight_info = "No flight offers found."
+            except:
+                flight_info = "Flight data parsing failed."
         else:
             flight_info = f"Flight API error ({res.status})."
     except Exception as e:
-        logger.error(f"Flight error: {e}")
-        flight_info = "Flights elusive, Sir."
+        logger.error(f"Booking.com flight error: {e}")
+        flight_info = "Flights currently elusive, Sir."
 
-    # 2. 4+ star hotel search during stay
+    # 2. 4+ star hotel search (correct endpoint)
     try:
         checkin = out_date
         checkout = ret_date
-        hotel_path = f"/api/v1/hotels/search?location={dest_code}&checkin_date={checkin}&checkout_date={checkout}&adults=1&stars=4,5&currency=EUR&sort=price"
+        hotel_path = f"/hotels/search?location={dest_code}&checkin_date={checkin}&checkout_date={checkout}&adults=1&stars=4,5&currency=EUR&sort=price"
         conn.request("GET", hotel_path, headers=headers)
         res = conn.getresponse()
         data = res.read()
-        logger.info(f"Booking.com Hotels API status: {res.status}")
-        logger.info(f"Hotels preview: {data.decode('utf-8')[:500]}...")
+        response_text = data.decode('utf-8')
+        logger.info(f"Booking.com Hotels API status for {dest_entity}: {res.status}")
+        logger.info(f"Hotels preview: {response_text[:500]}...")
 
         if res.status == 200:
-            hotel_json = json.loads(data)
-            hotels = hotel_json.get("hotels", []) or []
-            if hotels:
-                cheapest = min(hotels, key=lambda h: h.get("price", float("inf")))
-                name = cheapest.get("name", "Unknown Hotel")
-                address = cheapest.get("address", "Address not provided")
-                price = f"€{cheapest.get('price', '—')} for stay"
-                hotel_info = f"🏨 Recommended: {name}, {address}, {price}"
-            else:
-                hotel_info = "No 4+ star hotels found."
+            try:
+                hotel_json = json.loads(response_text)
+                hotels = hotel_json.get("hotels", []) or hotel_json.get("results", []) or []
+                if hotels:
+                    cheapest = min(hotels, key=lambda h: h.get("price", float("inf")))
+                    name = cheapest.get("name", "Unknown Hotel")
+                    address = cheapest.get("address", "Address not provided")
+                    price = f"€{cheapest.get('price', '—')} for stay"
+                    hotel_info = f"🏨 **Recommended hotel:** {name}\n   {address}\n   {price}"
+                else:
+                    hotel_info = "No 4+ star hotels found."
+            except:
+                hotel_info = "Hotel data parsing failed."
         else:
             hotel_info = f"Hotel API error ({res.status})."
     except Exception as e:
-        logger.error(f"Hotel error: {e}")
-        hotel_info = "Hotels elusive, Sir."
+        logger.error(f"Booking.com hotel error: {e}")
+        hotel_info = "Hotels currently elusive, Sir."
 
     combined = f"{flight_info}\n\n{hotel_info}" if flight_info or hotel_info else "No travel options found, Sir."
     return combined
 
-# The rest of your code (handlers, main, etc.) remains unchanged
-# Replace only the get_cheapest_roundtrip_info with get_travel_info and update daily_brief to use it
+# ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
+async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if ai_brain is None:
+        await update.message.reply_text("I'm dreadfully sorry, Sir, my thoughts are a bit muddled.")
+        return
+
+    user_text = update.message.text.strip()
+    if not user_text:
+        return
+
+    if 'chat_session' not in context.user_data:
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+        logger.info("New chat session created")
+
+    chat_session = context.user_data['chat_session']
+
+    try:
+        response = chat_session.send_message(user_text)
+        await update.message.reply_text(response.text.strip())
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        await update.message.reply_text("A momentary lapse in decorum, Sir. Shall we try again?")
+
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
-    # ... (your existing code)
+    logger.info("daily_brief function started")  # debug
+    chat_id = getattr(context.job, 'chat_id', None) or context.user_data.get('chat_id')
+    logger.info(f"daily_brief chat_id: {chat_id}")
+    if not chat_id:
+        logger.warning("daily_brief called without chat_id")
+        return
+
+    options = {
+        "Hawaii": "City:honolulu_hi_us",
+        "Bali": "City:denpasar_id",
+        "London": "City:london_gb"
+    }
+
+    await context.bot.send_message(chat_id=chat_id, text="Consulting the summer registries, Sir...")
+
+    report = "🛎 **Travel Briefing, Sir**\n\n"
+    data_for_ai = ""
+
     for name, entity in options.items():
-        info = get_travel_info(entity)  # <-- changed to new function
+        info = get_travel_info(entity)
         report += f"✈️ **{name}**:\n{info}\n\n"
         data_for_ai += f"{name}: {info}. "
-    # ... rest unchanged
+
+    await context.bot.send_message(chat_id=chat_id, text=report, parse_mode='Markdown')
+
+    if ai_brain is None:
+        await context.bot.send_message(chat_id=chat_id, text="The analytical department appears to be taking tea at present, Sir.")
+        return
+
+    try:
+        if 'chat_session' not in context.user_data:
+            context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+        chat_session = context.user_data['chat_session']
+
+        analysis_res = chat_session.send_message(
+            f"Provide a witty, dry, two-sentence analysis of these travel options (flights and hotels) for Sir: {data_for_ai}"
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"🎩 **Butler's insight:**\n{analysis_res.text.strip()}",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Analysis error: {e}")
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="The analytical department appears to be taking tea at present, Sir."
+        )
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    context.user_data['chat_id'] = chat_id
+
+    if ai_brain and 'chat_session' not in context.user_data:
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+        logger.info(f"Persistent chat session created for user {chat_id}")
+
+    await update.message.reply_text(
+        "The Concierge is at your service, Sir. I have cleared my local ledger for our fresh start."
+    )
+
+    jobs = context.job_queue.get_jobs_by_name('daily_check')
+    for job in jobs:
+        job.schedule_removal()
+
+    context.job_queue.run_daily(
+        daily_brief,
+        time=datetime.time(hour=8, minute=0),
+        chat_id=chat_id,
+        name='daily_check'
+    )
+
+async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("check_now command received")  # debug
+    context.user_data['chat_id'] = update.effective_chat.id
+    await daily_brief(context)
+
+# ─── MAIN ────────────────────────────────────────────────────────────────────────
+if __name__ == '__main__':
+    if not TELEGRAM_TOKEN:
+        logger.critical("TELEGRAM_TOKEN missing → cannot start")
+        exit(1)
+
+    logger.info("Starting butler bot...")
+
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .get_updates_read_timeout(30)
+        .get_updates_write_timeout(30)
+        .get_updates_pool_timeout(30)
+        .build()
+    )
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
+    logger.info("Webhook cleaned, pending updates dropped")
+
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('check', check_now))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+
+    logger.info("Bot handlers registered. Starting polling...")
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        poll_interval=1.0,
+        timeout=30,
+        bootstrap_retries=3
+    )
