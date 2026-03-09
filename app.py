@@ -109,17 +109,19 @@ def get_travel_info(dest_entity: str) -> str:
                 if hotel_json.get("status") is True:
                     hotels = hotel_json.get("hotels", []) or hotel_json.get("results", []) or []
                     if hotels:
-                        # Find cheapest with 4+ stars if available
+                        # Prefer 4+ star if available, fallback to cheapest
                         four_star_hotels = [h for h in hotels if h.get("stars", 0) >= 4]
                         if four_star_hotels:
                             cheapest = min(four_star_hotels, key=lambda h: h.get("price", float("inf")))
                         else:
-                            cheapest = min(hotels, key=lambda h: h.get("price", float("inf")))  # fallback
+                            cheapest = min(hotels, key=lambda h: h.get("price", float("inf")))
                         name = cheapest.get("name", "Unknown Hotel")
                         address = cheapest.get("address", "Address not provided")
                         price = f"€{cheapest.get('price', '—')} for stay"
                         stars = cheapest.get("stars", "N/A")
                         hotel_info = f"🏨 **Recommended hotel ({stars} stars):** {name}\n   {address}\n   {price}"
+                        if not four_star_hotels:
+                            hotel_info += "\n   (No 4+ star hotels matched; showing cheapest available)"
                     else:
                         hotel_info = "No hotels found in response."
                 else:
@@ -134,7 +136,6 @@ def get_travel_info(dest_entity: str) -> str:
 
     combined = f"{flight_info}\n\n{hotel_info}" if flight_info or hotel_info else "No travel options found, Sir."
     return combined
-
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ai_brain is None:
