@@ -19,8 +19,8 @@ import google.generativeai as genai
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GEMINI_KEY     = os.environ.get("GEMINI_KEY")
-RAPIDAPI_KEY   = os.environ.get("RAPIDAPI_KEY")
+GEMINI_KEY = os.environ.get("GEMINI_KEY")
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -44,13 +44,13 @@ try:
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
 
-# ─── TRAVEL SEARCH TOOL (Booking.com15 API) ──────────────────────────────────────
+# ─── TRAVEL SEARCH TOOL (Booking.com API) ────────────────────────────────────────
 def get_travel_info(dest_entity: str) -> str:
     today = dt.now()
     out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
     ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
 
-    # City name for hotel destination search
+    # City name for destination search
     city_map = {
         "City:honolulu_hi_us": "Honolulu",
         "City:denpasar_id": "Denpasar",
@@ -67,9 +67,9 @@ def get_travel_info(dest_entity: str) -> str:
     flight_info = "Flights currently elusive, Sir. (Limited support in this API)"
     hotel_info = ""
 
-    # 1. Hotels: First get destination ID
+    # 1. Search Destination to get dest_id
     try:
-        dest_path = f"/api/v1/hotels/searchHotels?query={city_name}&languagecode=en-us"
+        dest_path = f"/api/v1/hotels/searchDestination?query={city_name}&languagecode=en-us&arrival_date={out_date}&departure_date={ret_date}"
         conn.request("GET", dest_path, headers=headers)
         res = conn.getresponse()
         data = res.read()
