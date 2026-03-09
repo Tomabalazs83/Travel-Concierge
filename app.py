@@ -46,9 +46,9 @@ except Exception as e:
 
 # ─── TRAVEL SEARCH TOOL (Booking.com API) ────────────────────────────────────────
 def get_travel_info(dest_entity: str) -> str:
-    today = dt.now()
-    out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
-    ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
+    # Fixed specific dates (July 1–10, 2026)
+    out_date = "2026-07-01"   # arrival / check-in
+    ret_date = "2026-07-10"   # departure / check-out
 
     # City name for destination search
     city_map = {
@@ -69,7 +69,7 @@ def get_travel_info(dest_entity: str) -> str:
 
     # 1. Search Destination to get dest_id
     try:
-        dest_path = f"/api/v1/hotels/searchDestination?query={city_name}&languagecode=en-us&arrival_date={out_date}&departure_date={ret_date}"
+        dest_path = f"/api/v1/hotels/searchDestination?query={city_name}&languagecode=en-us&search_type=city&arrival_date={out_date}&departure_date={ret_date}"
         conn.request("GET", dest_path, headers=headers)
         res = conn.getresponse()
         data = res.read()
@@ -80,9 +80,13 @@ def get_travel_info(dest_entity: str) -> str:
         dest_id = ""
         if res.status == 200:
             dest_json = json.loads(response_text)
-            dest_results = dest_json.get("data", []) or dest_json.get("results", []) or []
-            if dest_results:
-                dest_id = dest_results[0].get("dest_id", "") or dest_results[0].get("id", "")
+            if dest_json.get("status") is True:
+                dest_results = dest_json.get("data", []) or dest_json.get("results", []) or []
+                if dest_results:
+                    dest_id = dest_results[0].get("dest_id", "") or dest_results[0].get("id", "")
+                    logger.info(f"Found dest_id: {dest_id}")
+            else:
+                logger.warning(f"Destination search failed: {dest_json.get('message')}")
     except Exception as e:
         logger.error(f"Destination search error: {e}")
         dest_id = ""
@@ -102,17 +106,20 @@ def get_travel_info(dest_entity: str) -> str:
 
             if res.status == 200:
                 hotel_json = json.loads(response_text)
-                hotels = hotel_json.get("hotels", []) or hotel_json.get("results", []) or []
-                if hotels:
-                    cheapest = min(hotels, key=lambda h: h.get("price", float("inf")))
-                    name = cheapest.get("name", "Unknown Hotel")
-                    address = cheapest.get("address", "Address not provided")
-                    price = f"€{cheapest.get('price', '—')} for stay"
-                    hotel_info = f"🏨 **Recommended hotel:** {name}\n   {address}\n   {price}"
+                if hotel_json.get("status") is True:
+                    hotels = hotel_json.get("hotels", []) or hotel_json.get("results", []) or []
+                    if hotels:
+                        cheapest = min(hotels, key=lambda h: h.get("price", float("inf")))
+                        name = cheapest.get("name", "Unknown Hotel")
+                        address = cheapest.get("address", "Address not provided")
+                        price = f"€{cheapest.get('price', '—')} for stay"
+                        hotel_info = f"🏨 **Recommended hotel:** {name}\n   {address}\n   {price}"
+                    else:
+                        hotel_info = "No 4+ star hotels found in response."
                 else:
-                    hotel_info = "No 4+ star hotels found."
+                    hotel_info = f"Hotel search failed: {hotel_json.get('message')}"
             else:
-                hotel_info = f"Hotel API error ({res.status})."
+                hotel_info = f"Hotel API error ({res.status}): {response_text[:200]}..."
         else:
             hotel_info = "No destination ID found for hotels."
     except Exception as e:
