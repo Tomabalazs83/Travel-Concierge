@@ -91,7 +91,7 @@ def get_travel_info(dest_entity: str) -> str:
         logger.error(f"Destination search error: {e}")
         dest_id = ""
 
-    # 2. Search hotels using dest_id (no star filter to get more results)
+    # 2. Search hotels using dest_id (no star filter to get results)
     try:
         if dest_id:
             checkin = out_date
