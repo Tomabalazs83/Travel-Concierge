@@ -91,12 +91,12 @@ def get_travel_info(dest_entity: str) -> str:
         logger.error(f"Destination search error: {e}")
         dest_id = ""
 
-    # 2. Search 4+ star hotels using dest_id
+    # 2. Search hotels using dest_id (no star filter to get more results)
     try:
         if dest_id:
             checkin = out_date
             checkout = ret_date
-            hotel_path = f"/api/v1/hotels/searchHotels?dest_id={dest_id}&search_type=CITY&arrival_date={checkin}&departure_date={checkout}&adults=1&room_qty=1&page_number=1&units=metric&temperature_unit=c&languagecode=en-us&currency_code=EUR&filter_by_stars=4,5&sort=price_asc"
+            hotel_path = f"/api/v1/hotels/searchHotels?dest_id={dest_id}&search_type=CITY&arrival_date={checkin}&departure_date={checkout}&adults=1&room_qty=1&page_number=1&units=metric&temperature_unit=c&languagecode=en-us&currency_code=EUR&sort=price_asc"
             conn.request("GET", hotel_path, headers=headers)
             res = conn.getresponse()
             data = res.read()
@@ -109,13 +109,19 @@ def get_travel_info(dest_entity: str) -> str:
                 if hotel_json.get("status") is True:
                     hotels = hotel_json.get("hotels", []) or hotel_json.get("results", []) or []
                     if hotels:
-                        cheapest = min(hotels, key=lambda h: h.get("price", float("inf")))
+                        # Find cheapest with 4+ stars if available
+                        four_star_hotels = [h for h in hotels if h.get("stars", 0) >= 4]
+                        if four_star_hotels:
+                            cheapest = min(four_star_hotels, key=lambda h: h.get("price", float("inf")))
+                        else:
+                            cheapest = min(hotels, key=lambda h: h.get("price", float("inf")))  # fallback
                         name = cheapest.get("name", "Unknown Hotel")
                         address = cheapest.get("address", "Address not provided")
                         price = f"€{cheapest.get('price', '—')} for stay"
-                        hotel_info = f"🏨 **Recommended hotel:** {name}\n   {address}\n   {price}"
+                        stars = cheapest.get("stars", "N/A")
+                        hotel_info = f"🏨 **Recommended hotel ({stars} stars):** {name}\n   {address}\n   {price}"
                     else:
-                        hotel_info = "No 4+ star hotels found in response."
+                        hotel_info = "No hotels found in response."
                 else:
                     hotel_info = f"Hotel search failed: {hotel_json.get('message')}"
             else:
