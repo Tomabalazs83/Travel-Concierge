@@ -69,7 +69,7 @@ def get_travel_info(dest_entity: str) -> str:
 
     # 1. Search Destination to get dest_id
     try:
-        dest_path = f"/api/v1/hotels/searchDestination?query={city_name}&languagecode=en-us&search_type=city&arrival_date={out_date}&departure_date={ret_date}"
+        dest_path = f"/api/v1/hotels/searchDestination?query={city_name}&languagecode=en-us&search_type=CITY&arrival_date={out_date}&departure_date={ret_date}"
         conn.request("GET", dest_path, headers=headers)
         res = conn.getresponse()
         data = res.read()
