@@ -44,18 +44,19 @@ try:
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
 
-# ─── TRAVEL SEARCH TOOL (Booking.com Flights & Hotels) ───────────────────────────
+# ─── TRAVEL SEARCH TOOL (Booking.com15 API) ──────────────────────────────────────
 def get_travel_info(dest_entity: str) -> str:
     today = dt.now()
     out_date = (today + timedelta(days=90)).strftime("%Y-%m-%d")
     ret_date = (today + timedelta(days=110)).strftime("%Y-%m-%d")
 
-    dest_map = {
-        "City:honolulu_hi_us": "HNL",
-        "City:denpasar_id": "DPS",
-        "City:london_gb": "LON"  # All London airports
+    # City name for hotel destination search
+    city_map = {
+        "City:honolulu_hi_us": "Honolulu",
+        "City:denpasar_id": "Denpasar",
+        "City:london_gb": "London"
     }
-    dest_code = dest_map.get(dest_entity, "XXX")
+    city_name = city_map.get(dest_entity, "Unknown")
 
     conn = http.client.HTTPSConnection("booking-com15.p.rapidapi.com")
     headers = {
@@ -63,55 +64,43 @@ def get_travel_info(dest_entity: str) -> str:
         'x-rapidapi-host': "booking-com15.p.rapidapi.com"
     }
 
-    flight_info = ""
+    flight_info = "Flights currently elusive, Sir. (Limited support in this API)"
     hotel_info = ""
 
-    # 1. Round-trip flight search (correct endpoint)
+    # 1. Hotels: First get destination ID
     try:
-        flight_path = f"/flights/search-roundtrip?origin=AMS&destination={dest_code}&departureDate={out_date}&returnDate={ret_date}&adults=1&currency=EUR&sort=price"
-        conn.request("GET", flight_path, headers=headers)
+        dest_path = f"/api/v1/hotels/searchHotels?query={city_name}&languagecode=en-us"
+        conn.request("GET", dest_path, headers=headers)
         res = conn.getresponse()
         data = res.read()
         response_text = data.decode('utf-8')
-        logger.info(f"Booking.com Flights API status for {dest_entity}: {res.status}")
-        logger.info(f"Flights preview: {response_text[:500]}...")
+        logger.info(f"Booking.com Destination Search status for {city_name}: {res.status}")
+        logger.info(f"Destination preview: {response_text[:500]}...")
 
+        dest_id = ""
         if res.status == 200:
-            try:
-                flight_json = json.loads(response_text)
-                flights = flight_json.get("flights", []) or flight_json.get("results", []) or []
-                if flights:
-                    cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
-                    price = f"€{cheapest.get('price', '—')}"
-                    outbound = cheapest.get("outbound", {})
-                    out_dep = outbound.get("departureTime", "—")[:16].replace('T', ' ')
-                    out_arr = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
-                    out_airline = outbound.get("airline", "—")
-                    flight_info = f"💰 **Flight price:** {price}\n🛫 Outbound: {out_dep} → {out_arr} ({out_airline})"
-                else:
-                    flight_info = "No flight offers found."
-            except:
-                flight_info = "Flight data parsing failed."
-        else:
-            flight_info = f"Flight API error ({res.status})."
+            dest_json = json.loads(response_text)
+            dest_results = dest_json.get("data", []) or dest_json.get("results", []) or []
+            if dest_results:
+                dest_id = dest_results[0].get("dest_id", "") or dest_results[0].get("id", "")
     except Exception as e:
-        logger.error(f"Booking.com flight error: {e}")
-        flight_info = "Flights currently elusive, Sir."
+        logger.error(f"Destination search error: {e}")
+        dest_id = ""
 
-    # 2. 4+ star hotel search (correct endpoint)
+    # 2. Search 4+ star hotels using dest_id
     try:
-        checkin = out_date
-        checkout = ret_date
-        hotel_path = f"/hotels/search?location={dest_code}&checkin_date={checkin}&checkout_date={checkout}&adults=1&stars=4,5&currency=EUR&sort=price"
-        conn.request("GET", hotel_path, headers=headers)
-        res = conn.getresponse()
-        data = res.read()
-        response_text = data.decode('utf-8')
-        logger.info(f"Booking.com Hotels API status for {dest_entity}: {res.status}")
-        logger.info(f"Hotels preview: {response_text[:500]}...")
+        if dest_id:
+            checkin = out_date
+            checkout = ret_date
+            hotel_path = f"/api/v1/hotels/searchHotels?dest_id={dest_id}&checkin={checkin}&checkout={checkout}&adults=1&room_number=1&currency_code=EUR&filter_by_stars=4,5&sort=price_asc"
+            conn.request("GET", hotel_path, headers=headers)
+            res = conn.getresponse()
+            data = res.read()
+            response_text = data.decode('utf-8')
+            logger.info(f"Booking.com Hotels API status for {city_name}: {res.status}")
+            logger.info(f"Hotels preview: {response_text[:500]}...")
 
-        if res.status == 200:
-            try:
+            if res.status == 200:
                 hotel_json = json.loads(response_text)
                 hotels = hotel_json.get("hotels", []) or hotel_json.get("results", []) or []
                 if hotels:
@@ -122,10 +111,10 @@ def get_travel_info(dest_entity: str) -> str:
                     hotel_info = f"🏨 **Recommended hotel:** {name}\n   {address}\n   {price}"
                 else:
                     hotel_info = "No 4+ star hotels found."
-            except:
-                hotel_info = "Hotel data parsing failed."
+            else:
+                hotel_info = f"Hotel API error ({res.status})."
         else:
-            hotel_info = f"Hotel API error ({res.status})."
+            hotel_info = "No destination ID found for hotels."
     except Exception as e:
         logger.error(f"Booking.com hotel error: {e}")
         hotel_info = "Hotels currently elusive, Sir."
@@ -157,7 +146,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("A momentary lapse in decorum, Sir. Shall we try again?")
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("daily_brief function started")  # debug
+    logger.info("daily_brief function started")
     chat_id = getattr(context.job, 'chat_id', None) or context.user_data.get('chat_id')
     logger.info(f"daily_brief chat_id: {chat_id}")
     if not chat_id:
@@ -230,7 +219,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info("check_now command received")  # debug
+    logger.info("check_now command received")
     context.user_data['chat_id'] = update.effective_chat.id
     await daily_brief(context)
 
