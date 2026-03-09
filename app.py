@@ -1,10 +1,8 @@
 import os
-import http.client
-import json
-import datetime
-import logging
 import asyncio
+import logging
 from datetime import datetime as dt, timedelta
+from playwright.sync_api import sync_playwright
 
 from telegram import Update
 from telegram.ext import (
@@ -20,7 +18,6 @@ import google.generativeai as genai
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
-RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -33,109 +30,105 @@ try:
     else:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
-            "gemini-2.5-flash-lite",
+            "gemini-1.5-flash-lite",
             system_instruction=(
                 "You are Jeeves, a sophisticated British butler. "
                 "Always address the user as 'Sir'. "
                 "Be witty, dry, concise, and elegant in your replies."
             )
         )
-        logger.info("Concierge initialized with gemini-2.5-flash-lite")
+        logger.info("Concierge initialized with gemini-1.5-flash-lite")
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
 
-# ─── TRAVEL SEARCH TOOL (Booking.com API) ────────────────────────────────────────
+# ─── TRAVEL SEARCH TOOL (Skyscanner Scraper) ─────────────────────────────────────
 def get_travel_info(dest_entity: str) -> str:
-    # Fixed specific dates (July 1–10, 2026)
-    out_date = "2026-07-01"
-    ret_date = "2026-07-10"
+    # Fixed dates for testing (July 1–10, 2026)
+    depart = dt(2026, 7, 1)
+    return_d = dt(2026, 7, 10)
 
-    # City name for destination search
-    city_map = {
-        "City:honolulu_hi_us": "Honolulu",
-        "City:denpasar_id": "Denpasar",
-        "City:london_gb": "London"
+    # IATA map
+    iata_map = {
+        "City:honolulu_hi_us": "HNL",
+        "City:denpasar_id": "DPS",
+        "City:london_gb": "LON"
     }
-    city_name = city_map.get(dest_entity, "Unknown")
+    dest_iata = iata_map.get(dest_entity, "XXX")
 
-    conn = http.client.HTTPSConnection("booking-com15.p.rapidapi.com")
-    headers = {
-        'x-rapidapi-key': RAPIDAPI_KEY,
-        'x-rapidapi-host': "booking-com15.p.rapidapi.com"
-    }
-
-    flight_info = "Flights currently elusive, Sir. (Limited support in this API)"
-    hotel_info = ""
-
-    # 1. Search Destination to get dest_id
+    # Scrape Skyscanner
     try:
-        dest_path = f"/api/v1/hotels/searchDestination?query={city_name}&languagecode=en-us&search_type=city&arrival_date={out_date}&departure_date={ret_date}"
-        conn.request("GET", dest_path, headers=headers)
-        res = conn.getresponse()
-        data = res.read()
-        response_text = data.decode('utf-8')
-        logger.info(f"Booking.com Destination Search status for {city_name}: {res.status}")
-        logger.info(f"Destination preview: {response_text[:500]}...")
-
-        dest_id = ""
-        if res.status == 200:
-            dest_json = json.loads(response_text)
-            if dest_json.get("status") is True:
-                dest_results = dest_json.get("data", []) or dest_json.get("results", []) or []
-                if dest_results:
-                    dest_id = dest_results[0].get("dest_id", "") or dest_results[0].get("id", "")
-                    logger.info(f"Found dest_id: {dest_id}")
-            else:
-                logger.warning(f"Destination search failed: {dest_json.get('message')}")
+        result = search_skyscanner("AMS", dest_iata, depart, return_d)
+        return result
     except Exception as e:
-        logger.error(f"Destination search error: {e}")
-        dest_id = ""
+        logger.error(f"Skyscanner scraper error: {e}")
+        return "The details are currently elusive, Sir."
 
-    # 2. Search hotels using dest_id (no star filter to get results)
-    try:
-        if dest_id:
-            checkin = out_date
-            checkout = ret_date
-            hotel_path = f"/api/v1/hotels/searchHotels?dest_id={dest_id}&search_type=CITY&arrival_date={checkin}&departure_date={checkout}&adults=1&room_qty=1&page_number=1&units=metric&temperature_unit=c&languagecode=en-us&currency_code=EUR&sort=price_asc"
-            conn.request("GET", hotel_path, headers=headers)
-            res = conn.getresponse()
-            data = res.read()
-            response_text = data.decode('utf-8')
-            logger.info(f"Booking.com Hotels API status for {city_name}: {res.status}")
-            logger.info(f"Hotels preview: {response_text[:500]}...")
+def search_skyscanner(origin_iata, dest_iata, depart_date, return_date):
+    # Format dates as YYMMDD
+    depart_str = depart_date.strftime("%y%m%d")
+    return_str = return_date.strftime("%y%m%d")
 
-            if res.status == 200:
-                hotel_json = json.loads(response_text)
-                if hotel_json.get("status") is True:
-                    hotels = hotel_json.get("hotels", []) or hotel_json.get("results", []) or []
-                    if hotels:
-                        # Prefer 4+ star if available, fallback to cheapest
-                        four_star_hotels = [h for h in hotels if h.get("stars", 0) >= 4]
-                        if four_star_hotels:
-                            cheapest = min(four_star_hotels, key=lambda h: h.get("price", float("inf")))
-                        else:
-                            cheapest = min(hotels, key=lambda h: h.get("price", float("inf")))
-                        name = cheapest.get("name", "Unknown Hotel")
-                        address = cheapest.get("address", "Address not provided")
-                        price = f"€{cheapest.get('price', '—')} for stay"
-                        stars = cheapest.get("stars", "N/A")
-                        hotel_info = f"🏨 **Recommended hotel ({stars} stars):** {name}\n   {address}\n   {price}"
-                        if not four_star_hotels:
-                            hotel_info += "\n   (No 4+ star hotels matched; showing cheapest available)"
-                    else:
-                        hotel_info = "No hotels found in response."
-                else:
-                    hotel_info = f"Hotel search failed: {hotel_json.get('message')}"
-            else:
-                hotel_info = f"Hotel API error ({res.status}): {response_text[:200]}..."
+    url = f"https://www.skyscanner.net/transport/flights/{origin_iata.lower()}/{dest_iata.lower()}/{depart_str}/{return_str}/?adults=1&adultsv2=1&cabinclass=economy&children=0&childrenv2=&inboundaltsenabled=false&infants=0&outboundaltsenabled=false&preferdirects=false&ref=home&rtn=1"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={'width': 1280, 'height': 800},
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+            locale='en-US',
+            timezone_id='Europe/Amsterdam'
+        )
+        page = context.new_page()
+
+        logger.info(f"Navigating to: {url}")
+        page.goto(url, timeout=60000)
+        page.wait_for_load_state("networkidle", timeout=60000)
+
+        # Wait for results
+        try:
+            page.wait_for_selector("div[data-testid='flight-card']", timeout=60000)
+            time.sleep(random.uniform(2, 5))  # mimic human
+        except Exception as e:
+            browser.close()
+            return "No results found or page failed to load."
+
+        # Extract cheapest price and details
+        cards = page.query_selector_all("div[data-testid='flight-card']")
+        if not cards:
+            browser.close()
+            return "No flight cards found."
+
+        prices = []
+        for card in cards:
+            try:
+                price_elem = card.query_selector("span[data-testid='price']")
+                airline_elem = card.query_selector("span[data-testid='airline-name']")
+                stops_elem = card.query_selector("span[data-testid='stops']")
+                duration_elem = card.query_selector("span[data-testid='duration']")
+
+                price = price_elem.inner_text().strip() if price_elem else "N/A"
+                airline = airline_elem.inner_text().strip() if airline_elem else "N/A"
+                stops = stops_elem.inner_text().strip() if stops_elem else "N/A"
+                duration = duration_elem.inner_text().strip() if duration_elem else "N/A"
+
+                prices.append({
+                    "price": price,
+                    "airline": airline,
+                    "stops": stops,
+                    "duration": duration
+                })
+            except:
+                continue
+
+        if prices:
+            cheapest = min(prices, key=lambda x: float(x["price"].replace("€", "").replace(",", "").strip()) if x["price"] != "N/A" else float("inf"))
+            result = f"💰 **{cheapest['price']}**\nAirline: {cheapest['airline']}\nStops: {cheapest['stops']}\nDuration: {cheapest['duration']}"
         else:
-            hotel_info = "No destination ID found for hotels."
-    except Exception as e:
-        logger.error(f"Booking.com hotel error: {e}")
-        hotel_info = "Hotels currently elusive, Sir."
+            result = "No readable prices found — selectors may have changed."
 
-    combined = f"{flight_info}\n\n{hotel_info}" if flight_info or hotel_info else "No travel options found, Sir."
-    return combined
+        browser.close()
+        return result
+
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ai_brain is None:
@@ -160,9 +153,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("A momentary lapse in decorum, Sir. Shall we try again?")
 
 async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("daily_brief function started")
     chat_id = getattr(context.job, 'chat_id', None) or context.user_data.get('chat_id')
-    logger.info(f"daily_brief chat_id: {chat_id}")
     if not chat_id:
         logger.warning("daily_brief called without chat_id")
         return
@@ -195,7 +186,7 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
         chat_session = context.user_data['chat_session']
 
         analysis_res = chat_session.send_message(
-            f"Provide a witty, dry, two-sentence analysis of these travel options (flights and hotels) for Sir: {data_for_ai}"
+            f"Provide a witty, dry, two-sentence analysis of these flight prices and details for Sir: {data_for_ai}"
         )
         await context.bot.send_message(
             chat_id=chat_id,
@@ -233,7 +224,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info("check_now command received")
     context.user_data['chat_id'] = update.effective_chat.id
     await daily_brief(context)
 
