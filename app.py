@@ -47,8 +47,8 @@ except Exception as e:
 # ─── TRAVEL SEARCH TOOL (Booking.com API) ────────────────────────────────────────
 def get_travel_info(dest_entity: str) -> str:
     # Fixed specific dates (July 1–10, 2026)
-    out_date = "2026-07-01"   # arrival / check-in
-    ret_date = "2026-07-10"   # departure / check-out
+    out_date = "2026-07-01"
+    ret_date = "2026-07-10"
 
     # City name for destination search
     city_map = {
@@ -69,7 +69,7 @@ def get_travel_info(dest_entity: str) -> str:
 
     # 1. Search Destination to get dest_id
     try:
-        dest_path = f"/api/v1/hotels/searchDestination?query={city_name}&languagecode=en-us&search_type=CITY&arrival_date={out_date}&departure_date={ret_date}"
+        dest_path = f"/api/v1/hotels/searchDestination?query={city_name}&languagecode=en-us&search_type=city&arrival_date={out_date}&departure_date={ret_date}"
         conn.request("GET", dest_path, headers=headers)
         res = conn.getresponse()
         data = res.read()
@@ -96,7 +96,7 @@ def get_travel_info(dest_entity: str) -> str:
         if dest_id:
             checkin = out_date
             checkout = ret_date
-            hotel_path = f"/api/v1/hotels/searchHotels?dest_id={dest_id}&checkin={checkin}&checkout={checkout}&adults=1&room_number=1&currency_code=EUR&filter_by_stars=4,5&sort=price_asc"
+            hotel_path = f"/api/v1/hotels/searchHotels?dest_id={dest_id}&search_type=CITY&arrival_date={checkin}&departure_date={checkout}&adults=1&room_qty=1&page_number=1&units=metric&temperature_unit=c&languagecode=en-us&currency_code=EUR&filter_by_stars=4,5&sort=price_asc"
             conn.request("GET", hotel_path, headers=headers)
             res = conn.getresponse()
             data = res.read()
