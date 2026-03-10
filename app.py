@@ -50,11 +50,11 @@ def get_travel_info(dest_entity: str) -> str:
         "City:denpasar_id": "DPS",
         "City:london_gb": "LON"  # or "LHR" for Heathrow
     }
-    dest_code = airport_map.get(dest_entity, "XXX")
+    dest_code = airport_map.get(dest_entity.split(':')[-1].upper(), "XXX")
 
-    # Use closer dates for testing (change back to July if needed)
-    outbound_date = (dt.now() + timedelta(days=14)).strftime("%Y-%m-%d")
-    return_date = (dt.now() + timedelta(days=45)).strftime("%Y-%m-%d")
+    # Use the same dates as your tester (July 1–10, 2026)
+    outbound_date = "2026-07-01"
+    return_date = "2026-07-10"
 
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
     querystring = {
@@ -64,10 +64,11 @@ def get_travel_info(dest_entity: str) -> str:
         "return_date": return_date,
         "travel_class": "ECONOMY",
         "adults": "1",
+        "show_hidden": "1",
         "currency": "EUR",
         "language_code": "en-US",
-        "country_code": "NL",  # Netherlands for European results
-        "search_type": "cheapest"  # Try "cheapest" instead of "best"
+        "country_code": "US",
+        "search_type": "best"  # <-- FIXED: use "best" (or try "cheap")
     }
 
     headers = {
@@ -79,11 +80,11 @@ def get_travel_info(dest_entity: str) -> str:
     try:
         response = requests.get(url, headers=headers, params=querystring, timeout=30)
         logger.info(f"Google Flights2 API status for {dest_entity}: {response.status_code}")
-        logger.info(f"Response preview: {response.text[:1000]}...")  # longer preview
+        logger.info(f"Response preview: {response.text[:1000]}...")  # longer preview for debugging
 
         if response.status_code == 200:
             data = response.json()
-            # Parse (adjust based on preview)
+            # Parse (adjust based on your tester's response structure)
             itineraries = data.get("data", {}).get("itineraries", {})
             flights = itineraries.get("topFlights", []) or itineraries.get("otherFlights", []) or []
             if flights:
