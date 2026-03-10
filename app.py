@@ -1,7 +1,6 @@
 import os
 import requests
 import logging
-import asyncio
 from datetime import datetime as dt, timedelta
 
 from telegram import Update
@@ -44,7 +43,7 @@ except Exception as e:
 
 # ─── TRAVEL SEARCH TOOL (google-flights2 API) ────────────────────────────────────
 def get_travel_info(dest_entity: str) -> str:
-    # Airport code map (use IATA codes - google-flights2 accepts them)
+    # Airport code map (IATA codes - google-flights2 accepts them)
     airport_map = {
         "City:honolulu_hi_us": "HNL",
         "City:denpasar_id": "DPS",
@@ -52,7 +51,7 @@ def get_travel_info(dest_entity: str) -> str:
     }
     dest_code = airport_map.get(dest_entity.split(':')[-1].upper(), "XXX")
 
-    # Use the same dates as your tester (July 1–10, 2026)
+    # Use the same dates as your successful tester
     outbound_date = "2026-07-01"
     return_date = "2026-07-10"
 
@@ -68,7 +67,7 @@ def get_travel_info(dest_entity: str) -> str:
         "currency": "EUR",
         "language_code": "en-US",
         "country_code": "US",
-        "search_type": "best"  # <-- FIXED: use "best" (or try "cheap")
+        "search_type": "best"  # exact match to your working tester
     }
 
     headers = {
@@ -79,18 +78,19 @@ def get_travel_info(dest_entity: str) -> str:
 
     try:
         response = requests.get(url, headers=headers, params=querystring, timeout=30)
+        logger.info(f"Full response length: {len(response.text)} bytes")
+        logger.info(f"Quota remaining: {response.headers.get('x-ratelimit-requests-remaining', 'N/A')}")
         logger.info(f"Google Flights2 API status for {dest_entity}: {response.status_code}")
-        logger.info(f"Response preview: {response.text[:1000]}...")  # longer preview for debugging
+        logger.info(f"Response preview: {response.text[:1000]}...")
 
         if response.status_code == 200:
             data = response.json()
-            # Parse (adjust based on your tester's response structure)
+            # Parse (adjust based on actual response structure)
             itineraries = data.get("data", {}).get("itineraries", {})
             flights = itineraries.get("topFlights", []) or itineraries.get("otherFlights", []) or []
             if flights:
                 cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
                 price = f"€{cheapest.get('price', '—')}"
-                # Outbound leg (first leg)
                 outbound = cheapest.get("legs", [{}])[0] if "legs" in cheapest else {}
                 out_dep = outbound.get("departureTime", "—")[:16].replace('T', ' ')
                 out_arr = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
