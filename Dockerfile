@@ -7,7 +7,7 @@ WORKDIR /app
 # Copy requirements first (better caching during builds)
 COPY requirements.txt .
 
-# Install Python dependencies (no Playwright or browser deps)
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of your application code
