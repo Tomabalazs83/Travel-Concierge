@@ -1,7 +1,7 @@
 import os
-import asyncio
+import requests
 import logging
-import random
+import asyncio
 from datetime import datetime as dt, timedelta
 
 from telegram import Update
@@ -15,11 +15,10 @@ from telegram.ext import (
 
 import google.generativeai as genai
 
-from playwright.async_api import async_playwright
-
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -32,7 +31,7 @@ try:
     else:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
-            "gemini-2.5-flash",  # Valid model name
+            "gemini-1.5-flash",
             system_instruction=(
                 "You are Jeeves, a sophisticated British butler. "
                 "Always address the user as 'Sir'. "
@@ -43,92 +42,66 @@ try:
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
 
-# ─── TRAVEL SEARCH TOOL (Async Skyscanner Scraper) ───────────────────────────────
-async def get_travel_info(dest_entity: str) -> str:
-    # Fixed dates for testing (July 1–10, 2026)
-    depart = dt(2026, 7, 1)
-    return_d = dt(2026, 7, 10)
-
-    # IATA map
-    iata_map = {
-        "City:honolulu_hi_us": "HNL",
-        "City:denpasar_id": "DPS",
-        "City:london_gb": "LON"
+# ─── TRAVEL SEARCH TOOL (google-flights2 API) ────────────────────────────────────
+def get_travel_info(dest_entity: str) -> str:
+    # Airport ID map (Google Flights uses numeric IDs)
+    airport_map = {
+        "AMS": "AMS",  # Amsterdam Schiphol
+        "HNL": "HNL",  # Honolulu
+        "DPS": "DPS",  # Denpasar Bali
+        "LON": "LON"   # London (all airports)
     }
-    dest_iata = iata_map.get(dest_entity, "XXX")
+
+    dest_code = airport_map.get(dest_entity.split(':')[-1].upper(), "XXX")
+
+    # Fixed dates for testing
+    outbound_date = "2026-07-01"
+    return_date = "2026-07-10"
+
+    url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
+    querystring = {
+        "departure_id": "AMS",
+        "arrival_id": dest_code,
+        "outbound_date": outbound_date,
+        "return_date": return_date,
+        "travel_class": "ECONOMY",
+        "adults": "1",
+        "show_hidden": "1",
+        "currency": "EUR",
+        "language_code": "en-US",
+        "country_code": "US",
+        "search_type": "best"
+    }
+
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": "google-flights2.p.rapidapi.com"
+    }
 
     try:
-        result = await search_skyscanner_async("AMS", dest_iata, depart, return_d)
-        return result
-    except Exception as e:
-        logger.error(f"Skyscanner scraper error: {e}")
-        return "The details are currently elusive, Sir."
+        response = requests.get(url, headers=headers, params=querystring, timeout=30)
+        logger.info(f"Google Flights2 API status for {dest_entity}: {response.status_code}")
+        logger.info(f"Response preview: {response.text[:500]}...")
 
-async def search_skyscanner_async(origin_iata, dest_iata, depart_date, return_date):
-    # Format dates as YYMMDD
-    depart_str = depart_date.strftime("%y%m%d")
-    return_str = return_date.strftime("%y%m%d")
-
-    url = f"https://www.skyscanner.net/transport/flights/{origin_iata.lower()}/{dest_iata.lower()}/{depart_str}/{return_str}/?adults=1&adultsv2=1&cabinclass=economy&children=0&childrenv2=&inboundaltsenabled=false&infants=0&outboundaltsenabled=false&preferdirects=false&ref=home&rtn=1"
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            viewport={'width': 1280, 'height': 800},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
-            locale='en-US',
-            timezone_id='Europe/Amsterdam'
-        )
-        page = await context.new_page()
-
-        logger.info(f"Navigating to: {url}")
-        await page.goto(url, timeout=90000)
-        await page.wait_for_load_state("networkidle", timeout=90000)
-
-        # Wait for results
-        try:
-            await page.wait_for_selector("div[data-testid='flight-card']", timeout=60000)
-            await asyncio.sleep(random.uniform(2, 5))  # mimic human
-        except Exception as e:
-            await browser.close()
-            return "No results found or page failed to load."
-
-        # Extract cheapest price and details
-        cards = await page.query_selector_all("div[data-testid='flight-card']")
-        if not cards:
-            await browser.close()
-            return "No flight cards found."
-
-        prices = []
-        for card in cards:
-            try:
-                price_elem = await card.query_selector("span[data-testid='price']")
-                airline_elem = await card.query_selector("span[data-testid='airline-name']")
-                stops_elem = await card.query_selector("span[data-testid='stops']")
-                duration_elem = await card.query_selector("span[data-testid='duration']")
-
-                price = await price_elem.inner_text() if price_elem else "N/A"
-                airline = await airline_elem.inner_text() if airline_elem else "N/A"
-                stops = await stops_elem.inner_text() if stops_elem else "N/A"
-                duration = await duration_elem.inner_text() if duration_elem else "N/A"
-
-                prices.append({
-                    "price": price.strip(),
-                    "airline": airline.strip(),
-                    "stops": stops.strip(),
-                    "duration": duration.strip()
-                })
-            except:
-                continue
-
-        if prices:
-            cheapest = min(prices, key=lambda x: float(x["price"].replace("€", "").replace(",", "").strip()) if x["price"] != "N/A" else float("inf"))
-            result = f"💰 **{cheapest['price']}**\nAirline: {cheapest['airline']}\nStops: {cheapest['stops']}\nDuration: {cheapest['duration']}"
+        if response.status_code == 200:
+            data = response.json()
+            # Typical structure (adjust after seeing real response)
+            flights = data.get("flights", []) or data.get("results", []) or data.get("best_flights", [])
+            if flights:
+                cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
+                price = f"€{cheapest.get('price', '—')}"
+                outbound = cheapest.get("outbound", {})
+                out_dep = outbound.get("departure", "—")
+                out_arr = outbound.get("arrival", "—")
+                airline = outbound.get("airline", "—")
+                return f"💰 **{price}**\n🛫 Outbound: {out_dep} → {out_arr} ({airline})"
+            else:
+                return "No flight offers found."
         else:
-            result = "No readable prices found — selectors may have changed."
-
-        await browser.close()
-        return result
+            return f"API error ({response.status_code}): {response.text[:200]}"
+    except Exception as e:
+        logger.error(f"Google Flights2 error: {e}")
+        return "The details are currently elusive, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,7 +144,7 @@ async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
     data_for_ai = ""
 
     for name, entity in options.items():
-        info = await get_travel_info(entity)  # Note: await for async
+        info = get_travel_info(entity)
         report += f"✈️ **{name}**:\n{info}\n\n"
         data_for_ai += f"{name}: {info}. "
 
