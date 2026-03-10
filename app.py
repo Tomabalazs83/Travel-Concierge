@@ -44,30 +44,64 @@ except Exception as e:
 
 # ─── TRAVEL SEARCH TOOL (google-flights2 API) ────────────────────────────────────
 def get_travel_info(dest_entity: str) -> str:
-    # Airport ID map (Google Flights uses numeric IDs)
+    # Airport code map (use IATA codes - google-flights2 accepts them)
     airport_map = {
-        "AMS": "AMS",  # Amsterdam Schiphol
-        "HNL": "HNL",  # Honolulu
-        "DPS": "DPS",  # Denpasar Bali
-        "LON": "LON"   # London (all airports)
+        "City:honolulu_hi_us": "HNL",
+        "City:denpasar_id": "DPS",
+        "City:london_gb": "LON"  # or "LHR" for Heathrow
+    }
+    dest_code = airport_map.get(dest_entity, "XXX")
+
+    # Use closer dates for testing (change back to July if needed)
+    outbound_date = (dt.now() + timedelta(days=14)).strftime("%Y-%m-%d")
+    return_date = (dt.now() + timedelta(days=45)).strftime("%Y-%m-%d")
+
+    url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
+    querystring = {
+        "departure_id": "AMS",
+        "arrival_id": dest_code,
+        "outbound_date": outbound_date,
+        "return_date": return_date,
+        "travel_class": "ECONOMY",
+        "adults": "1",
+        "currency": "EUR",
+        "language_code": "en-US",
+        "country_code": "NL",  # Netherlands for European results
+        "search_type": "cheapest"  # Try "cheapest" instead of "best"
     }
 
-    dest_code = airport_map.get(dest_entity.split(':')[-1].upper(), "XXX")
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": "google-flights2.p.rapidapi.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+    }
 
-    # Fixed dates for testing
-    outbound_date = "2026-07-01"
-    return_date = "2026-07-10"
+    try:
+        response = requests.get(url, headers=headers, params=querystring, timeout=30)
+        logger.info(f"Google Flights2 API status for {dest_entity}: {response.status_code}")
+        logger.info(f"Response preview: {response.text[:1000]}...")  # longer preview
 
- url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
-
-querystring = {"departure_id":"AMS","arrival_id":"DPS","outbound_date":"2026-07-01","return_date":"2026-07-10","travel_class":"ECONOMY","adults":"1","show_hidden":"1","currency":"EUR","language_code":"en-US","country_code":"US","search_type":"best"}
-
-headers = {
-	"x-rapidapi-key": "157b17098fmshd4d96d0afff8ca8p1c1a5cjsn4bd72b2a9b75",
-	"x-rapidapi-host": "google-flights2.p.rapidapi.com"
-}
-
-response = requests.get(url, headers=headers, params=querystring)
+        if response.status_code == 200:
+            data = response.json()
+            # Parse (adjust based on preview)
+            itineraries = data.get("data", {}).get("itineraries", {})
+            flights = itineraries.get("topFlights", []) or itineraries.get("otherFlights", []) or []
+            if flights:
+                cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
+                price = f"€{cheapest.get('price', '—')}"
+                # Outbound leg (first leg)
+                outbound = cheapest.get("legs", [{}])[0] if "legs" in cheapest else {}
+                out_dep = outbound.get("departureTime", "—")[:16].replace('T', ' ')
+                out_arr = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
+                airline = outbound.get("airline", {}).get("name", "—")
+                return f"💰 **{price}**\n🛫 Outbound: {out_dep} → {out_arr} ({airline})"
+            else:
+                return "No flight offers found in response."
+        else:
+            return f"API error ({response.status_code}): {response.text[:200]}"
+    except Exception as e:
+        logger.error(f"Google Flights2 error: {e}")
+        return "The details are currently elusive, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
