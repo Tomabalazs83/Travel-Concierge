@@ -58,50 +58,16 @@ def get_travel_info(dest_entity: str) -> str:
     outbound_date = "2026-07-01"
     return_date = "2026-07-10"
 
-    url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
-    querystring = {
-        "departure_id": "AMS",
-        "arrival_id": dest_code,
-        "outbound_date": outbound_date,
-        "return_date": return_date,
-        "travel_class": "ECONOMY",
-        "adults": "1",
-        "show_hidden": "1",
-        "currency": "EUR",
-        "language_code": "en-US",
-        "country_code": "US",
-        "search_type": "best"
-    }
+ url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
 
-    headers = {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "google-flights2.p.rapidapi.com"
-    }
+querystring = {"departure_id":"AMS","arrival_id":"DPS","outbound_date":"2026-07-01","return_date":"2026-07-10","travel_class":"ECONOMY","adults":"1","show_hidden":"1","currency":"EUR","language_code":"en-US","country_code":"US","search_type":"best"}
 
-    try:
-        response = requests.get(url, headers=headers, params=querystring, timeout=30)
-        logger.info(f"Google Flights2 API status for {dest_entity}: {response.status_code}")
-        logger.info(f"Response preview: {response.text[:500]}...")
+headers = {
+	"x-rapidapi-key": "157b17098fmshd4d96d0afff8ca8p1c1a5cjsn4bd72b2a9b75",
+	"x-rapidapi-host": "google-flights2.p.rapidapi.com"
+}
 
-        if response.status_code == 200:
-            data = response.json()
-            # Typical structure (adjust after seeing real response)
-            flights = data.get("flights", []) or data.get("results", []) or data.get("best_flights", [])
-            if flights:
-                cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
-                price = f"€{cheapest.get('price', '—')}"
-                outbound = cheapest.get("outbound", {})
-                out_dep = outbound.get("departure", "—")
-                out_arr = outbound.get("arrival", "—")
-                airline = outbound.get("airline", "—")
-                return f"💰 **{price}**\n🛫 Outbound: {out_dep} → {out_arr} ({airline})"
-            else:
-                return "No flight offers found."
-        else:
-            return f"API error ({response.status_code}): {response.text[:200]}"
-    except Exception as e:
-        logger.error(f"Google Flights2 error: {e}")
-        return "The details are currently elusive, Sir."
+response = requests.get(url, headers=headers, params=querystring)
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
