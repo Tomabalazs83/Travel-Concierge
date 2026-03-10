@@ -44,17 +44,17 @@ except Exception as e:
 
 # ─── TRAVEL SEARCH TOOL (google-flights2 API) ────────────────────────────────────
 def get_travel_info(dest_entity: str) -> str:
-    # Airport code map (IATA codes - google-flights2 accepts them)
+    # Closer dates (next 30–60 days from now)
+    outbound_date = (dt.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+    return_date = (dt.now() + timedelta(days=60)).strftime("%Y-%m-%d")
+
+    # Airport code map
     airport_map = {
         "City:honolulu_hi_us": "HNL",
         "City:denpasar_id": "DPS",
-        "City:london_gb": "LON"  # or "LHR" for Heathrow
+        "City:london_gb": "LON"
     }
     dest_code = airport_map.get(dest_entity.split(':')[-1].upper(), "XXX")
-
-    # Use the same dates as your successful tester
-    outbound_date = "2026-07-01"
-    return_date = "2026-07-10"
 
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
     querystring = {
@@ -64,11 +64,10 @@ def get_travel_info(dest_entity: str) -> str:
         "return_date": return_date,
         "travel_class": "ECONOMY",
         "adults": "1",
-        "show_hidden": "1",
         "currency": "EUR",
         "language_code": "en-US",
-        "country_code": "US",
-        "search_type": "best"  # exact match to your working tester
+        "country_code": "NL",  # Netherlands for better European results
+        "search_type": "cheap"  # Less restrictive than "best"
     }
 
     headers = {
@@ -79,14 +78,12 @@ def get_travel_info(dest_entity: str) -> str:
 
     try:
         response = requests.get(url, headers=headers, params=querystring, timeout=30)
-        logger.info(f"Full response length: {len(response.text)} bytes")
-        logger.info(f"Quota remaining: {response.headers.get('x-ratelimit-requests-remaining', 'N/A')}")
         logger.info(f"Google Flights2 API status for {dest_entity}: {response.status_code}")
         logger.info(f"Response preview: {response.text[:1000]}...")
+        logger.info(f"Quota remaining: {response.headers.get('x-ratelimit-requests-remaining', 'N/A')} / {response.headers.get('x-ratelimit-requests-limit', 'N/A')}")
 
         if response.status_code == 200:
             data = response.json()
-            # Parse (adjust based on actual response structure)
             itineraries = data.get("data", {}).get("itineraries", {})
             flights = itineraries.get("topFlights", []) or itineraries.get("otherFlights", []) or []
             if flights:
