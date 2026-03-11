@@ -27,9 +27,7 @@ except Exception as e:
 
 # ─── TRAVEL SEARCH TOOL (Aligned with Sir's Example) ─────────────────────────────
 def get_london_travel_info() -> str:
-    # Confirmed working dates: July 1 to July 10
     outbound_date, return_date = "2026-07-01", "2026-07-10"
-    
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
     params = {
         "departure_id": "AMS", "arrival_id": "LHR",
@@ -41,8 +39,6 @@ def get_london_travel_info() -> str:
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=30)
-        
-        # ─── QUOTA TRACKING ───
         remaining = response.headers.get('X-RateLimit-Requests-Remaining', 'N/A')
         logger.info(f"RapidAPI: {response.status_code} | Quota Remaining: {remaining}")
         
@@ -50,20 +46,22 @@ def get_london_travel_info() -> str:
             res_json = response.json()
             data_content = res_json.get("data", {})
             
-            # According to Sir's example: data -> topFlights
-            flights = data_content.get("topFlights", []) or data_content.get("otherFlights", [])
+            # THE FIX: Navigate the 'itineraries' bridge found in the logs
+            itin_block = data_content.get("itineraries", {})
+            
+            # Look for flights in BOTH the nested block AND the root (covering all schemas)
+            flights = itin_block.get("topFlights", []) or data_content.get("topFlights", []) or \
+                      itin_block.get("otherFlights", []) or data_content.get("otherFlights", [])
             
             if not flights:
-                logger.warning(f"No flights in 'data'. Available keys: {list(data_content.keys())}")
-                return "The flight manifest is currently empty for those dates, Sir."
+                logger.warning(f"Final check failed. Keys in data: {list(data_content.keys())}")
+                return "The flight manifest is currently blank, Sir. It seems the June-July window is quite popular."
 
-            # Exact mapping from Sir's example JSON
             lead = flights[0]
             price = lead.get('price', '—')
             dep_time = lead.get('departure_time', '—')
             arr_time = lead.get('arrival_time', '—')
             
-            # The airline is nested in the 'flights' segment list
             segments = lead.get('flights', [])
             airline = segments[0].get('airline', 'Unknown Carrier') if segments else "Carrier Unknown"
             
