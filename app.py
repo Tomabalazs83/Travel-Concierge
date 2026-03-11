@@ -48,12 +48,16 @@ def get_shanghai_travel_info() -> str:
             price = lead.get('price', '—')
             segments = lead.get('flights', [])
             
-            # Start the report with the premium formatting Sir expects
             report = f"💰 **Total Price: €{price} (Round Trip)**\n\n"
-            report += "🛫 **OUTBOUND JOURNEY**\n"
             
-            for i, seg in enumerate(segments):
-                # Detailed leg information
+            # --- OUTBOUND PARSING ---
+            report += "🛫 **OUTBOUND JOURNEY**\n"
+            outbound_count = 0
+            for seg in segments:
+                # If the segment starts at PVG, it's actually the return leg starting
+                if seg.get('departure_airport', {}).get('airport_code') == "PVG":
+                    break
+                
                 airline = seg.get('airline', 'Unknown')
                 f_num = seg.get('flight_number', '—')
                 dep_ap = seg.get('departure_airport', {}).get('airport_code', '—')
@@ -61,14 +65,28 @@ def get_shanghai_travel_info() -> str:
                 dep_time = seg.get('departure_airport', {}).get('time', '—')
                 aircraft = seg.get('aircraft', 'Standard Aircraft')
                 
-                leg_icon = "🔹" if i == 0 else "🔸"
-                report += f"{leg_icon} **{dep_ap} → {arr_ap}**\n"
+                report += f"🔹 **{dep_ap} → {arr_ap}**\n"
                 report += f"   Time: {dep_time}\n"
                 report += f"   Flight: {airline} {f_num} ({aircraft})\n"
+                outbound_count += 1
 
-            # The Return Leg Explanation
+            # --- RETURN PARSING ---
             report += f"\n🛬 **RETURN JOURNEY (July 10)**\n"
-            report += "⚠️ *Sir, the registry has bundled the return cost into the €{price}, but specific return flight numbers require a secondary token validation. I have confirmed the return date remains July 10th.*"
+            
+            # Check if any segments remain that start at or after the destination
+            return_segments = segments[outbound_count:]
+            if return_segments:
+                for seg in return_segments:
+                    airline = seg.get('airline', 'Unknown')
+                    f_num = seg.get('flight_number', '—')
+                    dep_ap = seg.get('departure_airport', {}).get('airport_code', '—')
+                    arr_ap = seg.get('arrival_airport', {}).get('airport_code', '—')
+                    dep_time = seg.get('departure_airport', {}).get('time', '—')
+                    report += f"🔸 **{dep_ap} → {arr_ap}**\n"
+                    report += f"   Time: {dep_time}\n"
+                    report += f"   Flight: {airline} {f_num}\n"
+            else:
+                report += f"⚠️ *Sir, the registry has bundled the return cost into the €{price}, but specific return flight numbers require secondary token validation.*"
             
             return report
             
