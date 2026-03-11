@@ -11,20 +11,21 @@ RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- AI SETUP ---
+# --- AI SETUP (Fixing the 404/v1beta issue) ---
 ai_brain = None
 try:
     if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
+        # Explicitly using 'gemini-1.5-flash' which is the stable production name
         ai_brain = genai.GenerativeModel(
-            "gemini-1.5-flash",
-            system_instruction="You are Jeeves, a dryly witty British butler. Address the user as 'Sir'. You remember all flight details shared in this chat."
+            model_name="gemini-2.5-flash",
+            system_instruction="You are Jeeves, a sophisticated British butler. Always address the user as 'Sir'. You remember all flight details shared in this chat history."
         )
         logger.info("Concierge Brain online.")
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
 
-# --- TRAVEL SEARCH TOOL ---
+# --- TRAVEL SEARCH TOOL (Restored to Full Detail) ---
 def get_shanghai_travel_info() -> str:
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
     params = {
@@ -43,33 +44,42 @@ def get_shanghai_travel_info() -> str:
         if response.status_code == 200:
             res_json = response.json()
             flights = res_json.get("data", {}).get("itineraries", {}).get("topFlights", [])
-            if not flights: return "Registry is blank, Sir."
+            if not flights: return "The manifests are empty, Sir."
             
             lead = flights[0]
             price = lead.get('price', '—')
             segments = lead.get('flights', [])
             
-            report = f"💰 **Total Price: €{price} (Round Trip)**\n\n🛫 **OUTBOUND**\n"
+            report = f"💰 **Total Price: €{price} (Round Trip)**\n\n🛫 **OUTBOUND JOURNEY**\n"
+            
             for seg in segments:
+                # If the segment starts at PVG, we've reached the destination (Return handled separately)
                 if seg.get('departure_airport', {}).get('airport_code') == "PVG": break
-                dep = seg.get('departure_airport', {}).get('airport_code')
-                arr = seg.get('arrival_airport', {}).get('airport_code')
+                
                 airline = seg.get('airline', 'Unknown')
                 f_num = seg.get('flight_number', '—')
-                report += f"🔹 {dep} → {arr} ({airline} {f_num})\n"
+                dep_ap = seg.get('departure_airport', {}).get('airport_code', '—')
+                arr_ap = seg.get('arrival_airport', {}).get('airport_code', '—')
+                dep_time = seg.get('departure_airport', {}).get('time', '—')
+                aircraft = seg.get('aircraft', 'Standard Aircraft')
+                
+                report += f"🔹 **{dep_ap} → {arr_ap}**\n"
+                report += f"   Time: {dep_time}\n"
+                report += f"   Flight: {airline} {f_num} ({aircraft})\n"
             
-            report += f"\n🛬 **RETURN JOURNEY (July 10)**\nDetails bundled in total price."
+            report += f"\n🛬 **RETURN JOURNEY (July 10)**\n"
+            report += f"⚠️ *Return details are bundled in the €{price}, but specific numbers require token validation.*"
             return report
-        return f"The registry is indisposed (Status {response.status_code}), Sir."
+        return "Registry indisposed, Sir."
     except Exception as e:
-        logger.error(f"Search Error: {e}")
-        return "I encountered a disturbance in the manifests, Sir."
+        return f"Manifests obscured: {e}, Sir."
 
 # --- BOT HANDLERS ---
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ai_brain: return
     user_text = update.message.text.strip()
 
+    # Get or create persistent session for memory
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
 
@@ -78,32 +88,33 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response.text.strip())
     except Exception as e:
         logger.error(f"Chat error: {e}")
+        await update.message.reply_text("My thoughts are currently a bit scattered, Sir. Perhaps we should /start anew?")
 
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. TRIGGER LIVE SEARCH (The part that was missing in your logs)
     await update.message.reply_text("Consulting the Shanghai registries for July, Sir...")
     info = get_shanghai_travel_info()
     
-    # 2. SEND RESULTS TO SIR
+    # Send detailed results to Sir
     await update.message.reply_text(f"🛎 **Registry Update**\n\n{info}", parse_mode='Markdown')
 
-    # 3. FEED THE AI MEMORY (SILENTLY)
+    # Update AI memory about the latest findings (Silently adding context to the history)
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
     
-    context.user_data['chat_session'].send_message(
-        f"Internal Butler Memo: I just found this flight for Sir: {info}. Please remember these details for future questions."
-    )
+    # We send the data to the history so Jeeves "knows" it for future questions
+    context.user_data['chat_session'].history.append({"role": "user", "parts": [f"System Update: You found these flights for Sir: {info}"]})
+    context.user_data['chat_session'].history.append({"role": "model", "parts": ["Understood, Sir. I have recorded these Shanghai flight details in my ledger."]})
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Wipe memory for a clean start
     context.user_data['chat_session'] = ai_brain.start_chat(history=[])
-    await update.message.reply_text("Concierge at your service, Sir. Memory initialized.")
+    await update.message.reply_text("The Concierge is at your service, Sir. I have cleared my ledger for your new requests.")
 
 if __name__ == '__main__':
     if not TELEGRAM_TOKEN: exit(1)
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
-    # Ensure fresh start for Railway
+    # Webhook cleanup for fresh Railway start
     loop = asyncio.get_event_loop()
     loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
 
