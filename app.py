@@ -44,19 +44,18 @@ except Exception as e:
 
 # ─── TRAVEL SEARCH TOOL (google-flights2 API) ────────────────────────────────────
 def get_travel_info(dest_entity: str) -> str:
-    # Closer dates (next 30–60 days from now)
-    outbound_date = (dt.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-    return_date = (dt.now() + timedelta(days=60)).strftime("%Y-%m-%d")
+    # Restricting dates to July as per your successful RapidAPI test
+    # Dates: 2026-07-01 to 2026-07-10
+    outbound_date = "2026-07-01"
+    return_date = "2026-07-10"
 
-    # Airport code map
-    airport_map = {
-        "City:honolulu_hi_us": "HNL",
-        "City:denpasar_id": "DPS",
-        "City:london_gb": "LON"
-    }
-    dest_code = airport_map.get(dest_entity.split(':')[-1].upper(), "XXX")
+    # Forcing Heathrow as requested to conserve Sir's quota
+    dest_code = "LHR" 
 
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
+    
+    # Refined parameters: Removing 'search_type' to use the API's default 'best' 
+    # and ensuring all required fields match the successful manual test
     querystring = {
         "departure_id": "AMS",
         "arrival_id": dest_code,
@@ -66,38 +65,46 @@ def get_travel_info(dest_entity: str) -> str:
         "adults": "1",
         "currency": "EUR",
         "language_code": "en-US",
-        "country_code": "NL",  # Netherlands for better European results
-        "search_type": "cheap"  # Less restrictive than "best"
+        "country_code": "NL"
     }
 
     headers = {
         "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "google-flights2.p.rapidapi.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36"
+        "x-rapidapi-host": "google-flights2.p.rapidapi.com"
     }
 
     try:
         response = requests.get(url, headers=headers, params=querystring, timeout=30)
-        logger.info(f"Google Flights2 API status for {dest_entity}: {response.status_code}")
-        logger.info(f"Response preview: {response.text[:1000]}...")
-        logger.info(f"Quota remaining: {response.headers.get('x-ratelimit-requests-remaining', 'N/A')} / {response.headers.get('x-ratelimit-requests-limit', 'N/A')}")
-
+        logger.info(f"API status: {response.status_code}")
+        
         if response.status_code == 200:
             data = response.json()
-            itineraries = data.get("data", {}).get("itineraries", {})
-            flights = itineraries.get("topFlights", []) or itineraries.get("otherFlights", []) or []
+            # The API nests results inside data -> itineraries
+            itin = data.get("data", {}).get("itineraries", {})
+            
+            # Prioritize topFlights, fallback to otherFlights
+            flights = itin.get("topFlights", []) or itin.get("otherFlights", [])
+            
             if flights:
-                cheapest = min(flights, key=lambda f: f.get("price", float("inf")))
+                # Select the lead offer
+                cheapest = flights[0] 
                 price = f"€{cheapest.get('price', '—')}"
-                outbound = cheapest.get("legs", [{}])[0] if "legs" in cheapest else {}
-                out_dep = outbound.get("departureTime", "—")[:16].replace('T', ' ')
-                out_arr = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
-                airline = outbound.get("airline", {}).get("name", "—")
-                return f"💰 **{price}**\n🛫 Outbound: {out_dep} → {out_arr} ({airline})"
+                
+                # Extract leg details
+                legs = cheapest.get("legs", [])
+                outbound = legs[0] if legs else {}
+                
+                # Format the display
+                airline = outbound.get("airline", {}).get("name", "Unknown Carrier")
+                dep_time = outbound.get("departureTime", "—")[:16].replace('T', ' ')
+                arr_time = outbound.get("arrivalTime", "—")[:16].replace('T', ' ')
+                
+                return f"💰 **{price}**\n🛫 Outbound: {dep_time} → {arr_time} ({airline})"
             else:
-                return "No flight offers found in response."
+                return "The flight registry is blank, Sir. Perhaps the dates are fully booked?"
         else:
-            return f"API error ({response.status_code}): {response.text[:200]}"
+            return f"API error ({response.status_code}): Request failed."
+            
     except Exception as e:
         logger.error(f"Google Flights2 error: {e}")
         return "The details are currently elusive, Sir."
