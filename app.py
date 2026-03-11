@@ -27,73 +27,59 @@ except Exception as e:
 
 # ─── TRAVEL SEARCH TOOL (Shanghai PVG Focus) ───────────────────────────────────
 def get_shanghai_travel_info() -> str:
-    """
-    Specifically queries flights from Amsterdam (AMS) to Shanghai (PVG)
-    for the July 1st to July 10th window.
-    """
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
-    
-    # Updated destination to PVG (Shanghai Pudong)
     params = {
-        "departure_id": "AMS",
-        "arrival_id": "PVG", 
-        "outbound_date": "2026-07-01",
-        "return_date": "2026-07-10",
-        "travel_class": "ECONOMY",
-        "adults": "1",
-        "show_hidden": "1",
-        "currency": "EUR",
-        "language_code": "en-US",
-        "country_code": "NL",
+        "departure_id": "AMS", "arrival_id": "PVG", 
+        "outbound_date": "2026-07-01", "return_date": "2026-07-10",
+        "travel_class": "ECONOMY", "adults": "1", "show_hidden": "1",
+        "currency": "EUR", "language_code": "en-US", "country_code": "NL",
         "search_type": "best"
     }
-    
-    headers = {
-        "x-rapidapi-key": RAPIDAPI_KEY,
-        "x-rapidapi-host": "google-flights2.p.rapidapi.com"
-    }
+    headers = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": "google-flights2.p.rapidapi.com"}
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=30)
-        remaining = response.headers.get('X-RateLimit-Requests-Remaining', 'N/A')
-        logger.info(f"RapidAPI (PVG): {response.status_code} | Quota Remaining: {remaining}")
+        logger.info(f"RapidAPI (PVG): {response.status_code} | Quota: {response.headers.get('X-RateLimit-Requests-Remaining')}")
         
         if response.status_code == 200:
             res_json = response.json()
-            data_content = res_json.get("data", {})
-            itin_block = data_content.get("itineraries", {})
+            flights = res_json.get("data", {}).get("itineraries", {}).get("topFlights", [])
             
-            # Navigating the live hierarchy confirmed in previous London logs
-            flights = itin_block.get("topFlights", []) or data_content.get("topFlights", [])
-            
-            if not flights:
-                return "The Shanghai manifests are currently blank for July, Sir. Perhaps a private charter?"
+            if not flights: return "The Shanghai manifests are empty, Sir."
 
             lead = flights[0]
             price = lead.get('price', '—')
-            dep_time = lead.get('departure_time', '—')
-            
-            # Extracting segments from the 'flights' list
             segments = lead.get('flights', [])
-            airline = segments[0].get('airline', 'Unknown Carrier') if segments else "Carrier Unknown"
             
-            # Reporting structure
-            report = f"💰 **€{price}**\n🛫 **Outbound:** {dep_time} ({airline})"
+            # Start the report
+            report = f"💰 **€{price}**\n"
             
-            # Check if a return leg is actually present in the segments
-            if len(segments) >= 2:
-                ret_seg = segments[-1]
-                ret_time = ret_seg.get('departure_airport', {}).get('time', '—')
-                report += f"\n🛬 **Return:** {ret_time}"
-            else:
-                report += f"\n⚠️ *Note: The registry price is noted, but only outbound details are visible in the lead entry, Sir.*"
-            
+            if len(segments) > 0:
+                first_leg = segments[0]
+                last_leg = segments[-1]
+                
+                # Check if the last segment is actually a return (starts at PVG)
+                # or just the end of the outbound (ends at PVG)
+                dest_reached = last_leg.get('arrival_airport', {}).get('airport_code') == "PVG"
+                
+                if dest_reached and len(segments) > 1:
+                    # This is an outbound journey with layovers
+                    report += f"🛫 **Outbound (via {last_leg.get('departure_airport', {}).get('airport_code')}):**\n"
+                    report += f"   {first_leg.get('departure_airport', {}).get('time')} ({first_leg.get('airline')})\n"
+                    report += f"⚠️ *Note: Return leg details are bundled in the €{price} price but not listed individually, Sir.*"
+                elif not dest_reached and len(segments) > 1:
+                    # This would be a true round-trip showing both legs
+                    report += f"🛫 **Outbound:** {first_leg.get('departure_airport', {}).get('time')}\n"
+                    report += f"🛬 **Return:** {last_leg.get('departure_airport', {}).get('time')}"
+                else:
+                    report += f"🛫 **Outbound:** {lead.get('departure_time')} ({first_leg.get('airline')})"
+
             return report
             
-        return f"The registry is indisposed (Status {response.status_code}), Sir."
+        return f"Registry error ({response.status_code}), Sir."
     except Exception as e:
-        logger.error(f"Shanghai flight search error: {e}")
-        return "I encountered a disturbance while consulting the Shanghai manifests, Sir."
+        logger.error(f"PVG Error: {e}")
+        return "The Shanghai manifests are obscured, Sir."
 
 # ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
