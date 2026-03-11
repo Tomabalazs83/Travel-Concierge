@@ -39,12 +39,10 @@ def get_shanghai_travel_info() -> str:
     
     try:
         response = requests.get(url, headers=headers, params=params, timeout=30)
-        logger.info(f"RapidAPI (PVG): {response.status_code}")
-        
         if response.status_code == 200:
             res_json = response.json()
             flights = res_json.get("data", {}).get("itineraries", {}).get("topFlights", [])
-            if not flights: return "The manifests are empty, Sir."
+            if not flights: return "The Shanghai manifests are empty, Sir."
             
             lead = flights[0]
             price = lead.get('price', '—')
@@ -53,18 +51,22 @@ def get_shanghai_travel_info() -> str:
             report = f"💰 **Total Price: €{price} (Round Trip)**\n\n🛫 **OUTBOUND JOURNEY**\n"
             
             for seg in segments:
-                # If the segment starts at PVG, we've reached the destination (Return handled separately)
                 if seg.get('departure_airport', {}).get('airport_code') == "PVG": break
                 
                 airline = seg.get('airline', 'Unknown')
                 f_num = seg.get('flight_number', '—')
                 dep_ap = seg.get('departure_airport', {}).get('airport_code', '—')
                 arr_ap = seg.get('arrival_airport', {}).get('airport_code', '—')
+                
+                # EXTRACTING BOTH TIMES
                 dep_time = seg.get('departure_airport', {}).get('time', '—')
+                arr_time = seg.get('arrival_airport', {}).get('time', '—')
+                
                 aircraft = seg.get('aircraft', 'Standard Aircraft')
                 
                 report += f"🔹 **{dep_ap} → {arr_ap}**\n"
-                report += f"   Time: {dep_time}\n"
+                report += f"   Depart: {dep_time}\n"
+                report += f"   Arrive: {arr_time}\n"
                 report += f"   Flight: {airline} {f_num} ({aircraft})\n"
             
             report += f"\n🛬 **RETURN JOURNEY (July 10)**\n"
@@ -73,7 +75,6 @@ def get_shanghai_travel_info() -> str:
         return "Registry indisposed, Sir."
     except Exception as e:
         return f"Manifests obscured: {e}, Sir."
-
 # --- BOT HANDLERS ---
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ai_brain: return
