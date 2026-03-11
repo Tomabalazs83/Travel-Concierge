@@ -27,57 +27,56 @@ except Exception as e:
 
 # ─── TRAVEL SEARCH TOOL (Aligned with Sir's Example) ─────────────────────────────
 def get_london_travel_info() -> str:
-    outbound_date, return_date = "2026-07-01", "2026-07-10"
+    # Exact dates and parameters from Sir's successful RapidAPI test
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
     params = {
         "departure_id": "AMS", "arrival_id": "LHR",
-        "outbound_date": outbound_date, "return_date": return_date,
-        "travel_class": "ECONOMY", "adults": "1", "currency": "EUR",
-        "language_code": "en-US", "country_code": "NL"
+        "outbound_date": "2026-07-01", "return_date": "2026-07-10",
+        "travel_class": "ECONOMY", "adults": "1", "show_hidden": "1",
+        "currency": "EUR", "language_code": "en-US", "country_code": "NL",
+        "search_type": "best"
     }
     headers = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": "google-flights2.p.rapidapi.com"}
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=30)
-        logger.info(f"RapidAPI Status: {response.status_code} | Quota: {response.headers.get('X-RateLimit-Requests-Remaining')}")
+        remaining = response.headers.get('X-RateLimit-Requests-Remaining', 'N/A')
+        logger.info(f"RapidAPI: {response.status_code} | Quota: {remaining}")
         
         if response.status_code == 200:
             res_json = response.json()
-            data_content = res_json.get("data", {})
-            itin_block = data_content.get("itineraries", {})
-            
-            flights = itin_block.get("topFlights", []) or data_content.get("topFlights", [])
+            data_block = res_json.get("data", {})
+            # Based on Sir's JSON: data -> itineraries -> topFlights
+            itineraries = data_block.get("itineraries", {})
+            flights = itineraries.get("topFlights", [])
             
             if not flights:
-                return "The flight manifest is blank, Sir."
+                return "The flight manifest is currently empty for those dates, Sir."
 
-            # The 'lead' is the best round-trip option
+            # We select the first flight (the KLM one at €201)
             lead = flights[0]
             
-            # 1. PRICE: Extracting exactly what the API calls 'price'
-            raw_price = lead.get('price')
-            price_str = f"€{raw_price}" if raw_price else "Price elusive"
-
-            # 2. FLIGHT SEGMENTS: This is where both Outbound and Return live
+            # Extracting direct keys from Sir's provided JSON
+            price = lead.get('price', '—')
+            dep_time = lead.get('departure_time', '—')
+            arr_time = lead.get('arrival_time', '—')
+            
+            # Airline is nested: flights[0] -> flights[list] -> [0] -> airline
             segments = lead.get('flights', [])
-            
-            # Logic: If it's a direct round trip, segment 0 is out, segment 1 is return.
-            # If there are layovers, we need to be more careful.
-            if len(segments) >= 2:
-                # Identifying outbound (AMS -> LHR) and return (LHR -> AMS)
-                out_seg = segments[0]
-                ret_seg = segments[-1] # The last segment is usually the final return leg
-                
-                out_info = f"🛫 **Outbound:** {out_seg.get('departure_airport', {}).get('time', '—')} ({out_seg.get('airline', '—')})"
-                ret_info = f"🛬 **Return:** {ret_seg.get('departure_airport', {}).get('time', '—')} ({ret_seg.get('airline', '—')})"
-                
-                return f"💰 **{price_str}**\n{out_info}\n{ret_info}"
-            
-            elif len(segments) == 1:
-                out_seg = segments[0]
-                return f"💰 **{price_str}**\n🛫 **Outbound only:** {out_seg.get('departure_airport', {}).get('time', '—')} ({out_seg.get('airline', '—')})\n(Note: Return details missing from registry, Sir.)"
+            airline = "Unknown"
+            flight_num = "—"
+            if segments:
+                airline = segments[0].get('airline', 'Unknown')
+                flight_num = segments[0].get('flight_number', '—')
 
-            return f"💰 **{price_str}**\nDetails are present but structurally complex, Sir."
+            # STRUCTURAL CHECK: Does this itinerary actually include the return?
+            # In Sir's JSON, it does NOT (it only has 1 segment). 
+            # We will label it accurately to avoid confusion.
+            if len(segments) > 1:
+                return f"💰 **€{price} (Round Trip Total)**\n🛫 Outbound: {dep_time}\n🛬 Return: {segments[-1].get('departure_airport', {}).get('time', '—')}\n✈️ {airline} ({flight_num})"
+            else:
+                return (f"💰 **€{price}**\n🛫 **Outbound:** {dep_time} ({airline} {flight_num})\n"
+                        f"⚠️ *Note: The registry currently only shows the outbound leg for this price, Sir.*")
             
         return f"The registry is indisposed (Status {response.status_code}), Sir."
     except Exception as e:
