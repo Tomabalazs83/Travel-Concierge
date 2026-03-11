@@ -18,7 +18,7 @@ try:
     if GEMINI_KEY:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
-            "gemini-1.5-flash",
+            "gemini-2.5-flash",
             system_instruction="You are Jeeves, a sophisticated and dryly witty British butler. Always address the user as 'Sir'."
         )
         logger.info("Concierge initialized.")
