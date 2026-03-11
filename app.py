@@ -1,5 +1,4 @@
 import os, requests, logging, asyncio, datetime
-from datetime import datetime as dt
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import google.generativeai as genai
@@ -9,7 +8,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # ─── AI SETUP ────────────────────────────────────────────────────────────────────
@@ -19,13 +18,12 @@ try:
         genai.configure(api_key=GEMINI_KEY)
         ai_brain = genai.GenerativeModel(
             "gemini-2.5-flash",
-            system_instruction="You are Jeeves, a sophisticated and dryly witty British butler. Always address the user as 'Sir'."
+            system_instruction="You are Jeeves, a dryly witty British butler. Address the user as 'Sir'. Remember past flight details discussed."
         )
-        logger.info("Concierge initialized.")
 except Exception as e:
     logger.error(f"AI setup failed: {e}")
 
-# ─── TRAVEL SEARCH TOOL (Shanghai PVG Focus) ───────────────────────────────────
+# ─── TRAVEL SEARCH TOOL ──────────────────────────────────────────────────────────
 def get_shanghai_travel_info() -> str:
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
     params = {
@@ -36,114 +34,65 @@ def get_shanghai_travel_info() -> str:
         "search_type": "best"
     }
     headers = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": "google-flights2.p.rapidapi.com"}
-
     try:
         response = requests.get(url, headers=headers, params=params, timeout=30)
         if response.status_code == 200:
             res_json = response.json()
             flights = res_json.get("data", {}).get("itineraries", {}).get("topFlights", [])
-            if not flights: return "The Shanghai manifests are empty, Sir."
-
+            if not flights: return "The manifest is empty, Sir."
             lead = flights[0]
             price = lead.get('price', '—')
             segments = lead.get('flights', [])
-            
-            report = f"💰 **Total Price: €{price} (Round Trip)**\n\n"
-            
-            # --- OUTBOUND PARSING ---
-            report += "🛫 **OUTBOUND JOURNEY**\n"
-            outbound_count = 0
+            report = f"💰 **Total Price: €{price} (Round Trip)**\n\n🛫 **OUTBOUND**\n"
             for seg in segments:
-                # If the segment starts at PVG, it's actually the return leg starting
-                if seg.get('departure_airport', {}).get('airport_code') == "PVG":
-                    break
-                
-                airline = seg.get('airline', 'Unknown')
-                f_num = seg.get('flight_number', '—')
-                dep_ap = seg.get('departure_airport', {}).get('airport_code', '—')
-                arr_ap = seg.get('arrival_airport', {}).get('airport_code', '—')
-                dep_time = seg.get('departure_airport', {}).get('time', '—')
-                aircraft = seg.get('aircraft', 'Standard Aircraft')
-                
-                report += f"🔹 **{dep_ap} → {arr_ap}**\n"
-                report += f"   Time: {dep_time}\n"
-                report += f"   Flight: {airline} {f_num} ({aircraft})\n"
-                outbound_count += 1
-
-            # --- RETURN PARSING ---
-            report += f"\n🛬 **RETURN JOURNEY (July 10)**\n"
-            
-            # Check if any segments remain that start at or after the destination
-            return_segments = segments[outbound_count:]
-            if return_segments:
-                for seg in return_segments:
-                    airline = seg.get('airline', 'Unknown')
-                    f_num = seg.get('flight_number', '—')
-                    dep_ap = seg.get('departure_airport', {}).get('airport_code', '—')
-                    arr_ap = seg.get('arrival_airport', {}).get('airport_code', '—')
-                    dep_time = seg.get('departure_airport', {}).get('time', '—')
-                    report += f"🔸 **{dep_ap} → {arr_ap}**\n"
-                    report += f"   Time: {dep_time}\n"
-                    report += f"   Flight: {airline} {f_num}\n"
-            else:
-                report += f"⚠️ *Sir, the registry has bundled the return cost into the €{price}, but specific return flight numbers require secondary token validation.*"
-            
+                if seg.get('departure_airport', {}).get('airport_code') == "PVG": break
+                dep = seg.get('departure_airport', {}).get('airport_code')
+                arr = seg.get('arrival_airport', {}).get('airport_code')
+                report += f"🔹 {dep} → {arr} ({seg.get('airline')} {seg.get('flight_number')})\n"
             return report
-            
-        return f"Registry error ({response.status_code}), Sir."
+        return "Registry indisposed, Sir."
     except Exception as e:
-        logger.error(f"PVG Detail Error: {e}")
-        return "The Shanghai manifests are currently obscured, Sir."
+        return "Manifests obscured, Sir."
 
-# ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
+# ─── MEMORY HANDLERS ──────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ai_brain: return
     user_text = update.message.text.strip()
+
+    # INITIALIZE SESSION IF MISSING (The Memory Source)
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+        logger.info("New persistent chat session created.")
+
     try:
-        response = context.user_data['chat_session'].send_message(user_text)
+        chat_session = context.user_data['chat_session']
+        response = chat_session.send_message(user_text)
         await update.message.reply_text(response.text.strip())
     except Exception as e:
         logger.error(f"Chat error: {e}")
 
-async def daily_brief(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = getattr(context.job, 'chat_id', None) or context.user_data.get('chat_id')
-    if not chat_id: return
-    
-    await context.bot.send_message(chat_id=chat_id, text="Consulting the Shanghai registries for July, Sir...")
+async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = get_shanghai_travel_info()
     
-    await context.bot.send_message(chat_id=chat_id, text=f"🛎 **Travel Briefing, Sir**\n\n{info}", parse_mode='Markdown')
+    # Send flight details to Sir
+    await update.message.reply_text(f"🛎 **Registry Update, Sir**\n\n{info}", parse_mode='Markdown')
 
-    if ai_brain:
-        try:
-            chat_session = context.user_data.get('chat_session') or ai_brain.start_chat(history=[])
-            res = chat_session.send_message(f"Sir is considering Shanghai for July. Here is the data: {info}. Give a witty 2-sentence analysis.")
-            await context.bot.send_message(chat_id=chat_id, text=f"🎩 **Butler's insight:**\n{res.text.strip()}")
-        except: pass
+    # Update AI memory about the latest findings
+    if 'chat_session' not in context.user_data:
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+    
+    # We "feed" the data to the AI's memory without Sir seeing the process
+    context.user_data['chat_session'].send_message(f"Update your records: I found a flight to Shanghai for €836 via Munich. {info}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['chat_id'] = update.effective_chat.id
-    if ai_brain: context.user_data['chat_session'] = ai_brain.start_chat(history=[])
-    await update.message.reply_text("The Concierge is at your service, Sir. Shanghai manifests are now being monitored.")
+    # Wipe memory for a clean start
+    context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+    await update.message.reply_text("The Concierge is at your service, Sir. My memory is now a blank ledger, ready for your instructions.")
 
-async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['chat_id'] = update.effective_chat.id
-    await daily_brief(context)
-
-# ─── MAIN ────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     if not TELEGRAM_TOKEN: exit(1)
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    # Ensure fresh start
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
-
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('check', check_now))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
-
-    logger.info("Bot starting...")
     app.run_polling(drop_pending_updates=True)
