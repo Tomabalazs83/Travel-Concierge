@@ -1,9 +1,11 @@
-import os, requests, logging, asyncio, datetime
+import os, requests, logging, asyncio, json
+from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import google.generativeai as genai
+from google.generativeai.types import content_types
 
-# --- CONFIGURATION ---
+# ─── CONFIGURATION ───────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
@@ -11,84 +13,106 @@ RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- AI SETUP ---
-ai_brain = genai.GenerativeModel(
-    model_name="gemini-2.5-flash",
-    system_instruction="You are Jeeves, a dryly witty British butler. Address the user as 'Sir'. You help manage travel manifests."
-)
-genai.configure(api_key=GEMINI_KEY)
-
-# --- THE UNIVERSAL SEARCH TOOL ---
-def get_travel_info(dest_code: str) -> str:
+# ─── THE TOOL: FLIGHT SEARCH FUNCTION ──────────────────────────────────────────
+def search_flights(arrival_id: str, outbound_date: str, return_date: str, adults: int = 1, departure_id: str = "AMS"):
+    """
+    Searches for real-time flight details. 
+    arrival_id and departure_id must be 3-letter IATA codes (e.g., 'PVG', 'JFK', 'LAX').
+    Dates must be in 'YYYY-MM-DD' format.
+    """
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
-    params = {
-        "departure_id": "AMS", "arrival_id": dest_code, 
-        "outbound_date": "2026-07-01", "return_date": "2026-07-10",
-        "travel_class": "ECONOMY", "adults": "1", "currency": "EUR",
-        "language_code": "en-US", "country_code": "NL", "search_type": "best"
+    querystring = {
+        "departure_id": departure_id,
+        "arrival_id": arrival_id,
+        "outbound_date": outbound_date,
+        "return_date": return_date,
+        "adults": str(adults),
+        "currency": "EUR",
+        "search_type": "best"
     }
-    headers = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": "google-flights2.p.rapidapi.com"}
-    
+    headers = {
+        "x-rapidapi-key": RAPIDAPI_KEY,
+        "x-rapidapi-host": "google-flights2.p.rapidapi.com"
+    }
+
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        logger.info(f"RapidAPI ({dest_code}): {response.status_code}")
+        response = requests.get(url, headers=headers, params=querystring, timeout=30)
+        logger.info(f"API Call: {departure_id}->{arrival_id} | Status: {response.status_code}")
         
         if response.status_code == 200:
-            res_json = response.json()
-            flights = res_json.get("data", {}).get("itineraries", {}).get("topFlights", [])
-            if not flights: return f"The manifests for {dest_code} are currently blank, Sir."
+            data = response.json()
+            flights = data.get("data", {}).get("itineraries", {}).get("topFlights", [])
+            if not flights:
+                return {"error": "No flights found for these criteria."}
             
-            lead = flights[0]
-            price = lead.get('price', '—')
-            segments = lead.get('flights', [])
-            
-            report = f"💰 **Total Price: €{price} (Round Trip)**\n\n🛫 **OUTBOUND**\n"
-            for seg in segments:
-                if seg.get('departure_airport', {}).get('airport_code') == dest_code: break
-                dep = seg.get('departure_airport', {}).get('airport_code', '—')
-                arr = seg.get('arrival_airport', {}).get('airport_code', '—')
-                report += f"🔹 {dep} → {arr} ({seg.get('airline')} {seg.get('flight_number')})\n"
-            
-            return report
-        return "The registry is indisposed, Sir."
+            # Return a structured list of the top 2 options for the AI to summarize
+            results = []
+            for f in flights[:2]:
+                option = {
+                    "total_price": f.get("price"),
+                    "legs": []
+                }
+                for leg in f.get("flights", []):
+                    option["legs"].append({
+                        "from": leg.get("departure_airport", {}).get("airport_code"),
+                        "to": leg.get("arrival_airport", {}).get("airport_code"),
+                        "departure": leg.get("departure_airport", {}).get("time"),
+                        "arrival": leg.get("arrival_airport", {}).get("time"),
+                        "airline": leg.get("airline"),
+                        "flight_no": leg.get("flight_number"),
+                        "aircraft": leg.get("aircraft")
+                    })
+                results.append(option)
+            return {"results": results}
+        return {"error": f"API returned status {response.status_code}"}
     except Exception as e:
-        return f"Disturbance in the manifests: {e}"
+        return {"error": str(e)}
 
-# --- UPDATED CHAT HANDLER WITH "INTENT DETECTION" ---
+# ─── AI SETUP WITH TOOLS ────────────────────────────────────────────────────────
+genai.configure(api_key=GEMINI_KEY)
+
+# Define the tools available to Jeeves
+tools = [search_flights]
+
+ai_brain = genai.GenerativeModel(
+    model_name="gemini-1.5-flash",
+    tools=tools,
+    system_instruction=(
+        "You are Jeeves, a sophisticated, dryly witty British butler and expert travel agent. "
+        "Address the user as 'Sir'. "
+        "You have access to a real-time flight registry tool. "
+        "When Sir asks for flights, ALWAYS use the search_flights tool with the correct IATA codes. "
+        "Default departure is AMS (Amsterdam) unless stated otherwise. "
+        "Current year is 2026. If Sir doesn't provide dates, ask for them politely. "
+        "Summarize findings elegantly with flight numbers, times, and aircraft."
+    )
+)
+
+# ─── BOT HANDLERS ────────────────────────────────────────────────────────────────
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not GEMINI_KEY: return
+    if not update.message or not update.message.text: return
     user_text = update.message.text.strip()
-    
-    if 'chat_session' not in context.user_data:
-        context.user_data['chat_session'] = ai_brain.start_chat(history=[])
 
-    # TRIGGER: If Sir mentions a new city, we force a registry search
-    if "new york" in user_text.lower():
-        await update.message.reply_text("Searching the New York manifests, Sir...")
-        info = get_travel_info("JFK")
-        context.user_data['chat_session'].history.append({"role": "user", "parts": [f"System: Found JFK flights: {info}"]})
-        await update.message.reply_text(info, parse_mode='Markdown')
-        return
+    if 'chat_session' not in context.user_data:
+        # enable_automatic_function_calling=True is the key to autonomy
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[], enable_automatic_function_calling=True)
 
     try:
-        response = context.user_data['chat_session'].send_message(user_text)
-        await update.message.reply_text(response.text.strip())
+        chat_session = context.user_data['chat_session']
+        response = chat_session.send_message(user_text)
+        await update.message.reply_text(response.text, parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Chat error: {e}")
-
-async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Defaulting back to Shanghai for the standard check
-    await update.message.reply_text("Consulting the Shanghai registries, Sir...")
-    info = get_travel_info("PVG")
-    await update.message.reply_text(f"🛎 **Update**\n\n{info}", parse_mode='Markdown')
+        await update.message.reply_text("A momentary lapse in coordination, Sir. Shall we try again?")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['chat_session'] = ai_brain.start_chat(history=[])
-    await update.message.reply_text("The Concierge is at your service, Sir. Memory and Registry are aligned.")
+    context.user_data['chat_session'] = ai_brain.start_chat(history=[], enable_automatic_function_calling=True)
+    await update.message.reply_text("The Concierge is at your service, Sir. I am ready to manage your global itineraries.")
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('check', check_now))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
+    
+    logger.info("Jeeves is now in the study, awaiting Sir...")
     app.run_polling(drop_pending_updates=True)
