@@ -75,7 +75,7 @@ genai.configure(api_key=GEMINI_KEY)
 tools = [search_flights]
 
 ai_brain = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
+    model_name="gemini-2.5-flash",
     tools=tools,
     system_instruction=(
         "You are Jeeves, a sophisticated, dryly witty British butler and expert travel agent. "
