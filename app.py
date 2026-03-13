@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # --- AI SETUP ---
 ai_brain = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
+    model_name="gemini-2.5-flash",
     system_instruction="You are Jeeves, a dryly witty British butler. Address the user as 'Sir'. You help manage travel manifests."
 )
 genai.configure(api_key=GEMINI_KEY)
