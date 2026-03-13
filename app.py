@@ -93,16 +93,13 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     chat_session = context.user_data['chat_session']
 
-    # Show typing indicator so Sir knows we are alive
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
 
     try:
         response = await chat_session.send_message_async(user_text)
         reply_text = response.text.strip()
 
-        # Check if AI issued the JSON Search Command
         if '"action"' in reply_text and '"search"' in reply_text:
-            # Clean up formatting in case AI used markdown blocks
             clean_json = reply_text.replace('```json', '').replace('```', '').strip()
             
             try:
@@ -113,21 +110,17 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 adults = str(params.get("adults", "1"))
                 dep = params.get("departure_id", "AMS")
                 
-                # IMMEDIATE FEEDBACK: Prevents the bot from seeming "frozen"
                 wait_msg = await update.message.reply_text(
                     f"Right away, Sir. Consulting the registries for {dest} ({d_out} to {d_ret} for {adults}). This may take a moment..."
                 )
                 
-                # RUN SEARCH IN BACKGROUND THREAD: Prevents Telegram from crashing
                 loop = asyncio.get_running_loop()
                 manifest_report = await loop.run_in_executor(
                     None, get_flight_manifest, dest, d_out, d_ret, adults, dep
                 )
                 
-                # UPDATE THE MESSAGE WITH RESULTS
                 await wait_msg.edit_text(f"🛎 **Registry Update**\n\n{manifest_report}", parse_mode='Markdown')
                 
-                # FEEDBACK TO MEMORY: Silently tell the AI what we found so it remembers
                 await chat_session.send_message_async(
                     f"System Note: You just executed a search. The results were: {manifest_report}. Keep this in your memory for Sir's future questions."
                 )
@@ -135,14 +128,37 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             except json.JSONDecodeError:
                 logger.error("Failed to parse AI JSON command.")
-                pass # Fallback to standard text if JSON is malformed
+                pass 
 
-        # If it's standard conversation, just reply
         await update.message.reply_text(reply_text)
 
     except Exception as e:
         logger.error(f"Chat error: {e}")
-        await update.message.reply_text("A momentary lapse in my cognitive registers, Sir. The api may be congested.")
+        await update.message.reply_text("A momentary lapse in my cognitive registers, Sir. The API may be congested.")
+
+# --- RESTORED /CHECK COMMAND ---
+async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if 'chat_session' not in context.user_data:
+        context.user_data['chat_session'] = ai_brain.start_chat(history=[])
+        
+    chat_session = context.user_data['chat_session']
+    
+    wait_msg = await update.message.reply_text(
+        "Right away, Sir. Consulting the Shanghai manifests for July 1st to July 10th. This may take a moment..."
+    )
+    
+    # Run the background search to prevent Telegram freeze
+    loop = asyncio.get_running_loop()
+    manifest_report = await loop.run_in_executor(
+        None, get_flight_manifest, "PVG", "2026-07-01", "2026-07-10", "1", "AMS"
+    )
+    
+    await wait_msg.edit_text(f"🛎 **Registry Update**\n\n{manifest_report}", parse_mode='Markdown')
+    
+    # Silently feed the exact text to AI memory
+    await chat_session.send_message_async(
+        f"System Note: You just executed a search. The results were: {manifest_report}. Keep this in your memory for Sir's future questions."
+    )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['chat_session'] = ai_brain.start_chat(history=[])
@@ -155,6 +171,7 @@ if __name__ == '__main__':
     loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
 
     app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('check', check_now)) # <--- The Missing Link Restored
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
     
     logger.info("Jeeves is awaiting Sir's requests...")
