@@ -11,7 +11,7 @@ RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ─── THE REGISTRY TOOL (Your Exact Approved Logic) ─────────────────────────────
+# ─── THE REGISTRY TOOL (Detailed Extraction) ───────────────────────────────────
 def get_flight_manifest(arrival_id: str, outbound_date: str, return_date: str, adults: str = "1", departure_id: str = "AMS") -> str:
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
     params = {
@@ -34,7 +34,7 @@ def get_flight_manifest(arrival_id: str, outbound_date: str, return_date: str, a
             price = lead.get('price', '—')
             segments = lead.get('flights', [])
             
-            report = f"💰 **Total Price: €{price} (Round Trip for {adults})**\n\n🛫 **OUTBOUND JOURNEY**\n"
+            report = f"💰 **Total Price: €{price} (Round Trip)**\n\n🛫 **OUTBOUND JOURNEY**\n"
             for seg in segments:
                 if seg.get('departure_airport', {}).get('airport_code') == arrival_id: break
                 
@@ -75,7 +75,7 @@ Rules for JSON:
 2. If you lack critical info (like dates or destination) and cannot infer it, DO NOT output JSON. Instead, ask Sir politely in standard text.
 3. Default departure is AMS.
 
-If Sir is just chatting or asking a follow-up question that doesn't require a NEW search (e.g., "What was the layover time again?"), respond normally in standard text.
+If Sir is just chatting or asking a follow-up question that doesn't require a NEW search, respond normally in standard text.
 """
 
 ai_brain = genai.GenerativeModel(
@@ -93,12 +93,14 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     chat_session = context.user_data['chat_session']
 
+    # Show typing indicator
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
 
     try:
         response = await chat_session.send_message_async(user_text)
         reply_text = response.text.strip()
 
+        # Check if AI issued the JSON Search Command
         if '"action"' in reply_text and '"search"' in reply_text:
             clean_json = reply_text.replace('```json', '').replace('```', '').strip()
             
@@ -114,6 +116,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Right away, Sir. Consulting the registries for {dest} ({d_out} to {d_ret} for {adults}). This may take a moment..."
                 )
                 
+                # Run search in background thread
                 loop = asyncio.get_running_loop()
                 manifest_report = await loop.run_in_executor(
                     None, get_flight_manifest, dest, d_out, d_ret, adults, dep
@@ -121,8 +124,9 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 await wait_msg.edit_text(f"🛎 **Registry Update**\n\n{manifest_report}", parse_mode='Markdown')
                 
+                # Silently feed the text to AI memory
                 await chat_session.send_message_async(
-                    f"System Note: You just executed a search. The results were: {manifest_report}. Keep this in your memory for Sir's future questions."
+                    f"System Note: You just executed a search. The results were: {manifest_report}. Keep this in your memory."
                 )
                 return
 
@@ -136,7 +140,6 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Chat error: {e}")
         await update.message.reply_text("A momentary lapse in my cognitive registers, Sir. The API may be congested.")
 
-# --- RESTORED /CHECK COMMAND ---
 async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'chat_session' not in context.user_data:
         context.user_data['chat_session'] = ai_brain.start_chat(history=[])
@@ -147,18 +150,22 @@ async def check_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Right away, Sir. Consulting the Shanghai manifests for July 1st to July 10th. This may take a moment..."
     )
     
-    # Run the background search to prevent Telegram freeze
-    loop = asyncio.get_running_loop()
-    manifest_report = await loop.run_in_executor(
-        None, get_flight_manifest, "PVG", "2026-07-01", "2026-07-10", "1", "AMS"
-    )
-    
-    await wait_msg.edit_text(f"🛎 **Registry Update**\n\n{manifest_report}", parse_mode='Markdown')
-    
-    # Silently feed the exact text to AI memory
-    await chat_session.send_message_async(
-        f"System Note: You just executed a search. The results were: {manifest_report}. Keep this in your memory for Sir's future questions."
-    )
+    try:
+        # Run the background search
+        loop = asyncio.get_running_loop()
+        manifest_report = await loop.run_in_executor(
+            None, get_flight_manifest, "PVG", "2026-07-01", "2026-07-10", "1", "AMS"
+        )
+        
+        await wait_msg.edit_text(f"🛎 **Registry Update**\n\n{manifest_report}", parse_mode='Markdown')
+        
+        # Silently feed the exact text to AI memory
+        await chat_session.send_message_async(
+            f"System Note: Sir used the /check command. The results were: {manifest_report}. Keep this in your memory."
+        )
+    except Exception as e:
+        logger.error(f"Check command error: {e}")
+        await wait_msg.edit_text("I encountered a disturbance while checking the manifests, Sir.")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['chat_session'] = ai_brain.start_chat(history=[])
@@ -171,7 +178,7 @@ if __name__ == '__main__':
     loop.run_until_complete(app.bot.delete_webhook(drop_pending_updates=True))
 
     app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('check', check_now)) # <--- The Missing Link Restored
+    app.add_handler(CommandHandler('check', check_now))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), chat))
     
     logger.info("Jeeves is awaiting Sir's requests...")
