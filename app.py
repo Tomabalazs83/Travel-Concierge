@@ -108,7 +108,8 @@ def get_flight_manifest(arrival_id: str, outbound_date: str, return_date: str, a
             
         return report
     except Exception as e:
-        return f"I encountered a disturbance in the manifests: {e}, Sir."────────
+        return f"I encountered a disturbance in the manifests: {e}, Sir."
+# ─── AI SETUP (Gemini 2.5 Flash + JSON Router) ───────────────────────────────
 genai.configure(api_key=GEMINI_KEY)
 
 system_prompt = """
@@ -233,3 +234,4 @@ if __name__ == '__main__':
     
     logger.info("Jeeves is awaiting Sir's requests...")
     app.run_polling(drop_pending_updates=True)
+
