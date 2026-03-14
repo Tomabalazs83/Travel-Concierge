@@ -11,7 +11,7 @@ RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ─── THE REGISTRY TOOL (Detailed Extraction) ───────────────────────────────────
+# ─── THE REGISTRY TOOL (Updated to check all buckets) ──────────────────────────
 def get_flight_manifest(arrival_id: str, outbound_date: str, return_date: str, adults: str = "1", departure_id: str = "AMS") -> str:
     url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
     params = {
@@ -27,14 +27,21 @@ def get_flight_manifest(arrival_id: str, outbound_date: str, return_date: str, a
         response = requests.get(url, headers=headers, params=params, timeout=45)
         if response.status_code == 200:
             res_json = response.json()
-            flights = res_json.get("data", {}).get("itineraries", {}).get("topFlights", [])
-            if not flights: return f"The manifests for {arrival_id} are empty for those dates, Sir."
+            itineraries = res_json.get("data", {}).get("itineraries", {})
+            
+            # THE FIX: Check 'topFlights' first, if empty, check 'otherFlights'
+            flights = itineraries.get("topFlights", [])
+            if not flights:
+                flights = itineraries.get("otherFlights", [])
+                
+            if not flights: 
+                return f"The manifests for {arrival_id} are genuinely empty for those dates, Sir."
             
             lead = flights[0]
             price = lead.get('price', '—')
             segments = lead.get('flights', [])
             
-            report = f"💰 **Total Price: €{price} (Round Trip)**\n\n🛫 **OUTBOUND JOURNEY**\n"
+            report = f"💰 **Total Price: €{price} (Round Trip for {adults})**\n\n🛫 **OUTBOUND JOURNEY**\n"
             for seg in segments:
                 if seg.get('departure_airport', {}).get('airport_code') == arrival_id: break
                 
@@ -57,7 +64,6 @@ def get_flight_manifest(arrival_id: str, outbound_date: str, return_date: str, a
         return f"The registry responded with status {response.status_code}, Sir."
     except Exception as e:
         return f"I encountered a disturbance in the manifests: {e}, Sir."
-
 # ─── AI SETUP (Gemini 2.5 Flash + JSON Router) ───────────────────────────────
 genai.configure(api_key=GEMINI_KEY)
 
