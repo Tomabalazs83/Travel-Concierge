@@ -11,9 +11,9 @@ RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ─── THE REGISTRY TOOL (Updated to check all buckets) ──────────────────────────
+# ─── THE REGISTRY TOOL (Now retrieves Return Flights via next_token) ───────────
 def get_flight_manifest(arrival_id: str, outbound_date: str, return_date: str, adults: str = "1", departure_id: str = "AMS") -> str:
-    url = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
+    url_search = "https://google-flights2.p.rapidapi.com/api/v1/searchFlights"
     params = {
         "departure_id": departure_id, "arrival_id": arrival_id,
         "outbound_date": outbound_date, "return_date": return_date,
@@ -24,47 +24,91 @@ def get_flight_manifest(arrival_id: str, outbound_date: str, return_date: str, a
     headers = {"x-rapidapi-key": RAPIDAPI_KEY, "x-rapidapi-host": "google-flights2.p.rapidapi.com"}
     
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=45)
-        if response.status_code == 200:
-            res_json = response.json()
-            itineraries = res_json.get("data", {}).get("itineraries", {})
+        # STAGE 1: FETCH OUTBOUND
+        response = requests.get(url_search, headers=headers, params=params, timeout=45)
+        if response.status_code != 200:
+            return f"The registry responded with status {response.status_code}, Sir."
             
-            # THE FIX: Check 'topFlights' first, if empty, check 'otherFlights'
-            flights = itineraries.get("topFlights", [])
-            if not flights:
-                flights = itineraries.get("otherFlights", [])
+        res_json = response.json()
+        itineraries = res_json.get("data", {}).get("itineraries", {})
+        
+        flights = itineraries.get("topFlights", [])
+        if not flights:
+            flights = itineraries.get("otherFlights", [])
+            
+        if not flights: 
+            return f"The manifests for {arrival_id} are genuinely empty for those dates, Sir."
+        
+        lead = flights[0]
+        price = lead.get('price', '—')
+        outbound_segments = lead.get('flights', [])
+        next_token = lead.get('next_token') # The key to the return journey
+        
+        report = f"💰 **Total Price: €{price} (Round Trip for {adults})**\n\n🛫 **OUTBOUND JOURNEY ({outbound_date})**\n"
+        for seg in outbound_segments:
+            airline = seg.get('airline', 'Unknown')
+            f_num = seg.get('flight_number', '—')
+            dep_ap = seg.get('departure_airport', {}).get('airport_code', '—')
+            arr_ap = seg.get('arrival_airport', {}).get('airport_code', '—')
+            dep_time = seg.get('departure_airport', {}).get('time', '—')
+            arr_time = seg.get('arrival_airport', {}).get('time', '—')
+            aircraft = seg.get('aircraft', 'Standard Aircraft')
+            
+            report += f"🔹 **{dep_ap} → {arr_ap}**\n"
+            report += f"   Depart: {dep_time}\n"
+            report += f"   Arrive: {arr_time}\n"
+            report += f"   Flight: {airline} {f_num} ({aircraft})\n"
+        
+        report += f"\n🛬 **RETURN JOURNEY ({return_date})**\n"
+        
+        # STAGE 2: FETCH RETURN IF TOKEN EXISTS
+        if next_token:
+            try:
+                url_return = "https://google-flights2.p.rapidapi.com/api/v1/getNextFlights"
+                return_params = {
+                    "next_token": next_token,
+                    "currency": "EUR",
+                    "language_code": "en-US"
+                }
+                # Second API call uses the same headers
+                ret_response = requests.get(url_return, headers=headers, params=return_params, timeout=30)
                 
-            if not flights: 
-                return f"The manifests for {arrival_id} are genuinely empty for those dates, Sir."
+                if ret_response.status_code == 200:
+                    ret_json = ret_response.json()
+                    ret_itineraries = ret_json.get("data", {}).get("itineraries", {})
+                    ret_flights = ret_itineraries.get("topFlights", [])
+                    if not ret_flights:
+                        ret_flights = ret_itineraries.get("otherFlights", [])
+                    
+                    if ret_flights:
+                        ret_lead = ret_flights[0]
+                        ret_segments = ret_lead.get('flights', [])
+                        for seg in ret_segments:
+                            airline = seg.get('airline', 'Unknown')
+                            f_num = seg.get('flight_number', '—')
+                            dep_ap = seg.get('departure_airport', {}).get('airport_code', '—')
+                            arr_ap = seg.get('arrival_airport', {}).get('airport_code', '—')
+                            dep_time = seg.get('departure_airport', {}).get('time', '—')
+                            arr_time = seg.get('arrival_airport', {}).get('time', '—')
+                            aircraft = seg.get('aircraft', 'Standard Aircraft')
+                            
+                            report += f"🔸 **{dep_ap} → {arr_ap}**\n"
+                            report += f"   Depart: {dep_time}\n"
+                            report += f"   Arrive: {arr_time}\n"
+                            report += f"   Flight: {airline} {f_num} ({aircraft})\n"
+                    else:
+                        report += f"⚠️ *Return flight details are currently hidden within the registry.*"
+                else:
+                    report += f"⚠️ *Unable to retrieve specific return legs (Status {ret_response.status_code}).*"
+            except Exception as e:
+                logger.error(f"Error fetching return flights: {e}")
+                report += f"⚠️ *A technical disturbance prevented the retrieval of the return details, Sir.*"
+        else:
+            report += f"⚠️ *Return details are bundled in the price, but no token was provided to extract them.*"
             
-            lead = flights[0]
-            price = lead.get('price', '—')
-            segments = lead.get('flights', [])
-            
-            report = f"💰 **Total Price: €{price} (Round Trip for {adults})**\n\n🛫 **OUTBOUND JOURNEY**\n"
-            for seg in segments:
-                if seg.get('departure_airport', {}).get('airport_code') == arrival_id: break
-                
-                airline = seg.get('airline', 'Unknown')
-                f_num = seg.get('flight_number', '—')
-                dep_ap = seg.get('departure_airport', {}).get('airport_code', '—')
-                arr_ap = seg.get('arrival_airport', {}).get('airport_code', '—')
-                dep_time = seg.get('departure_airport', {}).get('time', '—')
-                arr_time = seg.get('arrival_airport', {}).get('time', '—')
-                aircraft = seg.get('aircraft', 'Standard Aircraft')
-                
-                report += f"🔹 **{dep_ap} → {arr_ap}**\n"
-                report += f"   Depart: {dep_time}\n"
-                report += f"   Arrive: {arr_time}\n"
-                report += f"   Flight: {airline} {f_num} ({aircraft})\n"
-            
-            report += f"\n🛬 **RETURN JOURNEY**\n"
-            report += f"⚠️ *Return details are bundled in the €{price}.*"
-            return report
-        return f"The registry responded with status {response.status_code}, Sir."
+        return report
     except Exception as e:
-        return f"I encountered a disturbance in the manifests: {e}, Sir."
-# ─── AI SETUP (Gemini 2.5 Flash + JSON Router) ───────────────────────────────
+        return f"I encountered a disturbance in the manifests: {e}, Sir."────────
 genai.configure(api_key=GEMINI_KEY)
 
 system_prompt = """
